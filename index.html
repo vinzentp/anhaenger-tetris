@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Anhänger-Tetris</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;700;800&display=swap">
+  <link rel="stylesheet" href="style.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="scene"></canvas>
+
+  <header class="hud">
+    <h1><span class="logo">🛋️</span> Anhänger-Tetris</h1>
+    <div class="stats">
+      <span id="st-items"></span>
+      <span id="st-cartons"></span>
+      <span id="st-vol"></span>
+      <span id="st-h"></span>
+    </div>
+    <div class="fill"><i id="st-fill"></i></div>
+  </header>
+
+  <button id="panel-toggle" class="fab" type="button">☰ Ladung</button>
+
+  <aside id="panel">
+    <section>
+      <h2>Ladung</h2>
+      <ul id="yard-list"></ul>
+    </section>
+    <section>
+      <h2>Anhänger (Innenmaß)</h2>
+      <form id="trailer-form">
+        <label>Länge <input name="L" type="number" inputmode="numeric" min="100" max="800"> cm</label>
+        <label>Breite <input name="W" type="number" inputmode="numeric" min="80" max="260"> cm</label>
+        <label>Höhe <input name="H" type="number" inputmode="numeric" min="40" max="300"> cm</label>
+        <button type="submit">Übernehmen</button>
+      </form>
+    </section>
+    <section>
+      <button id="btn-solve" type="button" class="primary wide">Lösung zeigen</button>
+      <p class="note">Lädt alle Möbel und so viele Umzugskartons wie möglich.</p>
+    </section>
+    <section class="row">
+      <button id="btn-tarp" type="button">Plane ausblenden</button>
+      <button id="btn-cam" type="button">Kamera</button>
+      <button id="btn-reset" type="button">Alles abladen</button>
+    </section>
+    <section class="help">
+      <h2>Steuerung</h2>
+      <p>Möbelstück anklicken, mit der Maus über den Anhänger führen, Klick lädt es ein. Am Handy: Teil antippen, auf die Ladefläche tippen schiebt es dorthin, dann Ablegen.</p>
+      <dl>
+        <dt>Pfeile / WASD</dt><dd>schieben (Shift: 1 cm)</dd>
+        <dt>Q / E</dt><dd>drehen</dd>
+        <dt>R / F</dt><dd>nach vorn / zur Seite kippen</dd>
+        <dt>Leertaste</dt><dd>fallen lassen</dd>
+        <dt>Esc</dt><dd>zurück in den Hof</dd>
+        <dt>Z</dt><dd>letztes Teil wieder rausnehmen</dd>
+        <dt>Ziehen</dt><dd>Kamera drehen, Scrollen zoomt</dd>
+      </dl>
+      <p>Grün heißt: passt. Ein geladenes Teil anklicken nimmt es wieder heraus, alles darüber rutscht nach.</p>
+    </section>
+  </aside>
+
+  <div id="controls" class="is-idle">
+    <div id="hint"></div>
+    <div class="pad">
+      <div class="dpad">
+        <button type="button" data-act="move:1:0" class="up" aria-label="nach hinten">▲</button>
+        <button type="button" data-act="move:0:-1" class="left" aria-label="nach links">◀</button>
+        <button type="button" data-act="move:0:1" class="right" aria-label="nach rechts">▶</button>
+        <button type="button" data-act="move:-1:0" class="down" aria-label="nach vorn">▼</button>
+      </div>
+      <div class="rot">
+        <button type="button" data-act="rot:yaw:1">⟲ Drehen</button>
+        <button type="button" data-act="rot:yaw:-1">⟳ Drehen</button>
+        <button type="button" data-act="rot:tilt:1">⤵ Kippen</button>
+        <button type="button" data-act="rot:roll:1">↷ Seitlich</button>
+        <button type="button" data-act="yard" class="ghost">Zurück</button>
+        <button type="button" data-act="drop" id="btn-drop" class="primary">Ablegen</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" role="status"></div>
+
+  <div id="ask-solve" class="modal" hidden>
+    <div class="card">
+      <div class="big">🤔</div>
+      <h2>Wirklich die Lösung?</h2>
+      <p>Willst du es nicht doch erst selbst probieren? Die Lösung lädt alles aus und packt den Anhänger neu.</p>
+      <div class="row">
+        <button id="ask-yes" type="button">Lösung zeigen</button>
+        <button id="ask-no" type="button" class="primary">Selbst probieren</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="win" class="modal" hidden>
+    <div class="card">
+      <div class="big">🎉</div>
+      <h2>Alles drin!</h2>
+      <p id="win-text"></p>
+      <div class="row">
+        <button id="win-close" type="button">Anschauen</button>
+        <button id="win-again" type="button" class="primary">Nochmal</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
