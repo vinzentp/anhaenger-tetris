@@ -7,6 +7,8 @@
 //    remaining piece in every orientation at the lowest sensible spots (against walls and edges of what
 //    is already loaded). States are ranked by the volume under the load envelope: everything below it
 //    can no longer be reached from above, so less is better. Nesting pieces into each other pays off.
+//    Loose parts (cushions) follow the big pieces one by one, largest first; trying every order of
+//    many small parts would explode.
 // 2. Moving boxes: for the best finished furniture packings, boxes are filled in greedily, each at the
 //    lowest free spot (several fill orders are tried). The packing with the most boxes wins, ties go
 //    to the lower load.
@@ -52,6 +54,10 @@ function orientations(def, { L, W, H }) {
 const LOG2 = new Uint8Array(4097);
 for (let i = 2; i < LOG2.length; i++) LOG2[i] = LOG2[i >> 1] + 1;
 
+// The sparse table is big (about 5 MB) and only one height map is queried at a time, so all of them
+// share one set of buffers; a map rebuilds it when another one used it in between.
+let table = null;
+
 // Height of the load per cm², with a 2D sparse table for fast "highest point in a rectangle".
 class HeightMap {
   constructor(L, W, from) {
@@ -73,26 +79,28 @@ class HeightMap {
     const { L, W, h } = this;
     const KX = LOG2[L] + 1;
     const KZ = LOG2[W] + 1;
-    const t = new Array(KX * KZ);
+    if (!table || table.L !== L || table.W !== W) {
+      table = { L, W, t: Array.from({ length: KX * KZ }, (_, i) => (i ? new Int16Array(L * W) : null)) };
+    }
+    table.owner = this;
+    const t = table.t;
     t[0] = h;
     for (let kz = 1; kz < KZ; kz++) {
       const prev = t[kz - 1];
-      const cur = new Int16Array(L * W);
+      const cur = t[kz];
       const step = 1 << (kz - 1);
       const zmax = W - (1 << kz);
       for (let x = 0; x < L; x++) {
         for (let z = 0, i = x * W; z <= zmax; z++, i++) cur[i] = prev[i] > prev[i + step] ? prev[i] : prev[i + step];
       }
-      t[kz] = cur;
     }
     for (let kx = 1; kx < KX; kx++) {
       const step = (1 << (kx - 1)) * W;
       const n = (L - (1 << kx) + 1) * W;
       for (let kz = 0; kz < KZ; kz++) {
         const prev = t[(kx - 1) * KZ + kz];
-        const cur = new Int16Array(L * W);
+        const cur = t[kx * KZ + kz];
         for (let i = 0; i < n; i++) cur[i] = prev[i] > prev[i + step] ? prev[i] : prev[i + step];
-        t[kx * KZ + kz] = cur;
       }
     }
     this.t = t;
@@ -101,6 +109,7 @@ class HeightMap {
 
   // Highest point in [x0, x1) × [z0, z1).
   max(x0, x1, z0, z1) {
+    if (table?.owner !== this || !this.t) this.build();
     const kx = LOG2[x1 - x0];
     const kz = LOG2[z1 - z0];
     const a = this.t[kx * this.KZ + kz];
@@ -160,7 +169,6 @@ function stillFits(hm, left, orients, xs, zs, { L, W, H }) {
     const [sx, sy, sz] = o.size;
     return candidates(sx, xs, L).some((x) => candidates(sz, zs, W).some((z) => hm.landing(o, x, z) + sy <= H));
   }));
-  hm.t = null;
   return ok;
 }
 
@@ -173,6 +181,14 @@ function beamSearch(defs, trailer, { beam, perOrient, layer, deadline }) {
   const members = kinds.map((k) => defs.map((_, i) => i).filter((i) => kindOf[i] === k));
   const orients = kinds.map((_, ki) => orientations(defs[members[ki][0]], trailer));
   if (orients.some((o) => !o.length)) return [];
+  const isLoose = kinds.map((_, ki) => !!defs[members[ki][0]].loose);
+  const bigKinds = kinds.map((_, ki) => ki).filter((ki) => !isLoose[ki]);
+  const nBig = bigKinds.reduce((n, ki) => n + members[ki].length, 0);
+  const looseSeq = kinds
+    .map((_, ki) => ki)
+    .filter((ki) => isLoose[ki])
+    .sort((a, b) => P.volume(defs[members[b][0]].boxes) - P.volume(defs[members[a][0]].boxes))
+    .flatMap((ki) => members[ki].map(() => ki));
 
   let states = [{
     hm: new HeightMap(L, W),
@@ -188,7 +204,7 @@ function beamSearch(defs, trailer, { beam, perOrient, layer, deadline }) {
     for (const st of states) {
       if (Date.now() > deadline) return null;
       st.hm.build();
-      for (let k = 0; k < kinds.length; k++) {
+      for (const k of level < nBig ? bigKinds : [looseSeq[level - nBig]]) {
         if (!st.left[k]) continue;
         const left = st.left.slice();
         left[k]--;
@@ -221,7 +237,6 @@ function beamSearch(defs, trailer, { beam, perOrient, layer, deadline }) {
           }
         }
       }
-      st.hm.t = null;
     }
     // keep the best `beam` states per group in which every missing piece still fits somewhere on its own
     states = [];
@@ -265,13 +280,15 @@ function beamSearch(defs, trailer, { beam, perOrient, layer, deadline }) {
 
 // ---------- moving boxes
 
-// 2D sliding-window maximum of the height map for a w × d footprint.
+// 2D sliding-window maximum of the height map for a w × d footprint. The result lives in a shared
+// buffer and is only valid until the next call.
+let wm = null;
 function windowMax(hm, w, d) {
   const { L, W, h } = hm;
   const nz = W - d + 1;
   const nx = L - w + 1;
-  const tmp = new Int16Array(L * nz);
-  const dq = new Int32Array(Math.max(L, W));
+  if (!wm || wm.n < L * W) wm = { n: L * W, tmp: new Int16Array(L * W), out: new Int16Array(L * W), dq: new Int32Array(Math.max(L, W)) };
+  const { tmp, out, dq } = wm;
   for (let x = 0; x < L; x++) {
     let head = 0;
     let tail = 0;
@@ -284,7 +301,6 @@ function windowMax(hm, w, d) {
       if (z >= d - 1) tmp[x * nz + z - d + 1] = h[base + dq[head]];
     }
   }
-  const out = new Int16Array(nx * nz);
   for (let z = 0; z < nz; z++) {
     let head = 0;
     let tail = 0;
@@ -343,7 +359,7 @@ export function solve(defs, trailer, { carton = null, timeLimit = 30000, onBest 
   // so both run (plain envelope and whole box layers), each with a widening beam while time allows.
   // The best finished packings of every run are collected.
   const metrics = layer ? [0, layer] : [0];
-  const share = (timeLimit * 0.55) / metrics.length;
+  const share = (timeLimit * 0.8) / metrics.length;
   const finals = new Map();
   let timedOut = false;
   metrics.forEach((m, mi) => {
@@ -357,8 +373,8 @@ export function solve(defs, trailer, { carton = null, timeLimit = 30000, onBest 
       }
       res.sort((a, z) => a.env - z.env);
       for (const f of res) finals.set(JSON.stringify(f.placements), f);
-      // the next round costs about four times as much
-      if (Date.now() + (Date.now() - t0) * 4 > until) break;
+      // the next round costs about twice as much (measured), with some margin
+      if (Date.now() + (Date.now() - t0) * 2.5 > until) break;
     }
   });
   if (!finals.size) return { best: null, timedOut, ms: Date.now() - start };

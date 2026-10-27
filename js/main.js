@@ -10,7 +10,7 @@ import * as FX from './effects.js';
 
 const STEP = 5;
 const HOVER = 14;
-const SAVE_KEY = 'anhaenger-tetris-v2';
+const SAVE_KEY = 'anhaenger-tetris-v3';
 const DEFAULT_TRAILER = { L: 250, W: 150, H: 140 };
 const $ = (s) => document.querySelector(s);
 
@@ -542,7 +542,16 @@ function dims(it) {
 function refreshUI() {
   const list = $('#yard-list');
   list.innerHTML = '';
+  let group = null;
   for (const it of furniture()) {
+    if (it.def.group !== group) {
+      group = it.def.group;
+      const h = document.createElement('li');
+      h.className = 'group';
+      const n = furniture().filter((x) => x.def.group === group);
+      h.textContent = `${group} (${n.filter((x) => x.placed).length}/${n.length})`;
+      list.append(h);
+    }
     const li = document.createElement('li');
     const btn = document.createElement('button');
     const state = it === active ? 'in der Hand' : it.placed ? 'geladen' : 'im Hof';

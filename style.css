@@ -300,3 +300,5 @@ button.wide { width: 100%; }
 }
 
 #controls.is-playing .pad { display: none; }
+#yard-list .group { font-size: 12px; font-weight: 800; color: var(--muted); margin: 6px 2px 0; }
+#yard-list .group:first-child { margin-top: 0; }

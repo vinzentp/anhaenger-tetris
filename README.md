@@ -29,8 +29,8 @@ Jedes Möbelstück ist in `js/furniture.js` eine Liste achsenparalleler Quader i
 
 ## Dateien
 
-- `js/furniture.js`: Möbelkatalog (Couch: Eckteil 87 × 85, Seitenteile 1,53 m und 1,86 m; zwei Matratzen 200 × 90 × 20) und Umzugskarton
+- `js/furniture.js`: Möbelkatalog (Couch: Eckteil 87 × 85, Seitenteile 1,53 m und 1,86 m, 5 Sitz- und 6 Rückenkissen einzeln; zwei Matratzen 200 × 90 × 20) und Umzugskarton
 - `js/physics.js`: 90°-Drehungen, Fallen lassen, Kollision
-- `js/solver.js`: Lösungssuche, läuft in `js/solver-worker.js`. Höhenkarte im 1-cm-Raster; Möbel per Beam-Search (alle 24 Drehungen, Positionen an Wänden und Kanten, bewertet nach verlorenem Platz), danach Kartons gierig an die jeweils tiefste freie Stelle
+- `js/solver.js`: Lösungssuche, läuft in `js/solver-worker.js`. Höhenkarte im 1-cm-Raster; Möbel per Beam-Search (alle 24 Drehungen, Positionen an Wänden und Kanten, bewertet nach verlorenem Platz), die Kissen danach der Größe nach in die besten Lücken, zuletzt Kartons gierig an die jeweils tiefste freie Stelle
 - `js/scene.js`: Anhänger mit Bordwänden, Spriegel und Plane, Hof
 - `js/main.js`: Spiellogik, Eingabe, UI
