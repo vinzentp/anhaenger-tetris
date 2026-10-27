@@ -691,7 +691,6 @@ function tickMove(dt) {
         g.rest = REST;
         // after a rest it starts again a little slower
         g.t = Math.min(g.t, DAS + 0.15);
-        tick();
       }
     }
     changed ||= active[axis] !== before;
@@ -1240,21 +1239,6 @@ function meow() {
   o.connect(f).connect(g).connect(actx.destination);
   o.start(t);
   o.stop(t + 0.62);
-}
-
-// a soft click when the piece comes to rest at an edge
-function tick() {
-  if (!actx) return;
-  const t = actx.currentTime;
-  const o = actx.createOscillator();
-  const g = actx.createGain();
-  o.type = 'triangle';
-  o.frequency.setValueAtTime(1400, t);
-  g.gain.setValueAtTime(0.06, t);
-  g.gain.exponentialRampToValueAtTime(0.0005, t + 0.05);
-  o.connect(g).connect(actx.destination);
-  o.start(t);
-  o.stop(t + 0.06);
 }
 
 // pushing against a wall: a dull knock and a small shake
