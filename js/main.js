@@ -549,27 +549,154 @@ function stepForward() {
 }
 
 // Camera-relative axes on the floor, snapped to the trailer axes.
+let lastF = null;
 function camAxes() {
   const d = new THREE.Vector3();
   camera.getWorldDirection(d);
-  const f = Math.abs(d.x) > Math.abs(d.z) ? [Math.sign(d.x), 0] : [0, Math.sign(d.z)];
+  // a little hysteresis, so the mapping does not flip back and forth around 45 degrees
+  const keep = lastF && (lastF[0] ? Math.abs(d.x) * 1.25 > Math.abs(d.z) && Math.sign(d.x) === lastF[0]
+    : Math.abs(d.z) * 1.25 > Math.abs(d.x) && Math.sign(d.z) === lastF[1]);
+  const f = keep ? lastF : Math.abs(d.x) > Math.abs(d.z) ? [Math.sign(d.x), 0] : [0, Math.sign(d.z)];
+  lastF = f;
   return { f, r: [-f[1], f[0]] };
 }
 
-function move(fwd, right, step = STEP) {
-  if (!active) return;
-  const { f, r } = camAxes();
-  active.x = Math.round(active.x + (f[0] * fwd + r[0] * right) * step);
-  active.z = Math.round(active.z + (f[1] * fwd + r[1] * right) * step);
+// ---------- arrow movement
+// Tap: one step (5 cm, with Shift 1 cm), or up to the next edge if that comes first.
+// Hold: after a short delay the piece glides and speeds up; it rests for a moment wherever it would sit
+// flush against a wall or a loaded piece, so lining things up needs no fiddling. While arrows are
+// held, their mapping to the trailer axes stays fixed even if the camera turns.
+const DIRS = { up: [1, 0], down: [-1, 0], left: [0, -1], right: [0, 1] };
+const DAS = 0.16;      // hold this long before gliding
+const REST = 0.12;     // pause at a flush position
+const held = new Map(); // direction -> pressed with Shift
+let axesLock = null;
+const glide = { x: { t: 0, rest: 0, acc: 0 }, z: { t: 0, rest: 0, acc: 0 } };
+
+// World direction per axis (-1, 0, 1) from the arrows held right now.
+function heldDirs() {
+  const { f, r } = axesLock ?? camAxes();
+  let x = 0;
+  let z = 0;
+  for (const d of held.keys()) {
+    const [fwd, right] = DIRS[d];
+    x += f[0] * fwd + r[0] * right;
+    z += f[1] * fwd + r[1] * right;
+  }
+  return { x: Math.sign(x), z: Math.sign(z) };
+}
+
+// Positions along an axis where the piece's outline is flush with a wall or with an edge of a loaded box
+// beside it. `contact` limits them to touching edges (for gliding), taps also stop where edges align.
+function stopsOn(axis, contact) {
+  const i = axis === 'x' ? 0 : 2;
+  const j = axis === 'x' ? 2 : 0;
+  const size = active.shape.size[i];
+  const lim = (axis === 'x' ? trailer.L : trailer.W) - size;
+  const o0 = axis === 'x' ? active.z : active.x;
+  const o1 = o0 + active.shape.size[j];
+  const out = [0, lim];
+  for (const b of placedBoxes) {
+    if (b.max[j] <= o0 + 0.5 || b.min[j] >= o1 - 0.5) continue;
+    out.push(b.min[i] - size, b.max[i]);
+    if (!contact) out.push(b.min[i], b.max[i] - size);
+  }
+  return out.map(Math.round).filter((v) => v >= 0 && v <= lim);
+}
+
+function nextStop(axis, dir, contact) {
+  const pos = active[axis];
+  let best = null;
+  for (const v of stopsOn(axis, contact)) {
+    if ((v - pos) * dir >= 1 && (best === null || Math.abs(v - pos) < Math.abs(best - pos))) best = v;
+  }
+  return best;
+}
+
+function wallOf(axis, dir) {
+  return dir < 0 ? 0 : (axis === 'x' ? trailer.L : trailer.W) - active.shape.size[axis === 'x' ? 0 : 2];
+}
+
+// Moves the piece along one axis by up to `dist` cm; returns true when it stopped at an edge.
+function slide(axis, dir, dist, snap, contact) {
+  const pos = active[axis];
+  const wall = wallOf(axis, dir);
+  let to = dir > 0 ? Math.min(pos + dist, wall) : Math.max(pos - dist, wall);
+  let stopped = to === wall;
+  if (snap) {
+    const s = nextStop(axis, dir, contact);
+    if (s !== null && (s - to) * dir <= 0) {
+      to = s;
+      stopped = true;
+    }
+  }
+  if (to === pos) return true;
+  active[axis] = to;
+  return stopped;
+}
+
+function press(dir, fine = false) {
+  if (!active || playing || held.has(dir)) return;
+  if (!held.size) axesLock = camAxes();
+  held.set(dir, fine);
+  const { f, r } = axesLock;
+  const [fwd, right] = DIRS[dir];
+  const axis = f[0] * fwd + r[0] * right ? 'x' : 'z';
+  const sign = axis === 'x' ? f[0] * fwd + r[0] * right : f[1] * fwd + r[1] * right;
+  Object.assign(glide[axis], { t: 0, rest: 0, acc: 0 });
+  const atWall = active[axis] === wallOf(axis, sign);
+  slide(axis, sign, fine ? 1 : STEP, !fine, false);
+  if (atWall) bump();
   updateActive();
 }
 
-function moveTo(px, pz) {
-  if (!active) return;
-  const [sx, , sz] = active.shape.size;
-  active.x = Math.round((px - sx / 2) / STEP) * STEP;
-  active.z = Math.round((pz - sz / 2) / STEP) * STEP;
-  updateActive();
+function release(dir) {
+  held.delete(dir);
+  if (!held.size) axesLock = null;
+}
+
+function releaseAll() {
+  held.clear();
+  axesLock = null;
+}
+
+// Called every frame: gliding while arrows are held.
+function tickMove(dt) {
+  if (!held.size) return;
+  if (!active || playing) {
+    releaseAll();
+    return;
+  }
+  const dirs = heldDirs();
+  const fine = [...held.values()].some(Boolean);
+  let changed = false;
+  for (const axis of ['x', 'z']) {
+    const g = glide[axis];
+    if (!dirs[axis]) continue;
+    g.t += dt;
+    if (g.t < DAS) continue;
+    if (g.rest > 0) {
+      g.rest -= dt;
+      continue;
+    }
+    const speed = fine ? 18 : Math.min(240, 70 + (g.t - DAS) * 320);
+    g.acc += speed * dt;
+    const n = Math.floor(g.acc);
+    if (n < 1) continue;
+    g.acc -= n;
+    const before = active[axis];
+    if (slide(axis, dirs[axis], n, !fine, true) && !fine) {
+      g.acc = 0;
+      if (active[axis] !== before) {
+        g.rest = REST;
+        // after a rest it starts again a little slower
+        g.t = Math.min(g.t, DAS + 0.15);
+        tick();
+      }
+    }
+    changed ||= active[axis] !== before;
+  }
+  if (changed) updateActive();
 }
 
 function rotate(kind, sign = 1) {
@@ -668,7 +795,6 @@ function placeAll(placed) {
 
 const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
-const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -BED);
 
 function castAt(e) {
   const rect = canvas.getBoundingClientRect();
@@ -686,31 +812,21 @@ function hitsStack(hits) {
   return !first || s.distance < first.point.distanceTo(raycaster.ray.origin);
 }
 
-// Point on the load (placed pieces or floor) under the pointer, ignoring the piece in hand.
-function loadPoint(hits) {
-  const h = hits.find((x) => x.item.placed);
-  if (h) return h.point;
-  const p = new THREE.Vector3();
-  return raycaster.ray.intersectPlane(floorPlane, p) ? p : null;
-}
-
 let down = null;
 canvas.addEventListener('pointerdown', (e) => {
   down = { x: e.clientX, y: e.clientY };
   unlockAudio();
 });
+// The mouse (or a tap) only picks things up: a piece from the yard, a box from the stack, the cat.
+// Moving and dropping is done with the arrows.
 canvas.addEventListener('pointermove', (e) => {
   if (playing) return;
   const hits = castAt(e);
-  if (e.pointerType === 'mouse' && !e.buttons && active) {
-    const p = loadPoint(hits);
-    if (p) moveTo(p.x, p.z);
-  }
   const yardHit = hits.find((h) => !h.item.placed && h.item !== active);
   hovered = e.pointerType === 'mouse' ? (yardHit?.item ?? null) : null;
   stackHover = e.pointerType === 'mouse' && hitsStack(hits);
   const catHover = e.pointerType === 'mouse' && !!cat.hit(raycaster);
-  canvas.style.cursor = catHover || stackHover || yardHit || (!active && hits.length) ? 'pointer' : active ? 'crosshair' : '';
+  canvas.style.cursor = catHover || stackHover || yardHit ? 'pointer' : '';
 });
 canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
@@ -727,24 +843,21 @@ canvas.addEventListener('pointerup', (e) => {
     fetchCarton();
     return;
   }
-  if (!active) {
-    if (hits.length) select(hits[0].item);
-    return;
-  }
-  const yardHit = hits.find((h) => !h.item.placed && h.item !== active);
-  if (yardHit && yardHit === hits.find((h) => h.item !== active)) {
-    select(yardHit.item);
-    return;
-  }
-  const p = loadPoint(hits);
-  if (e.pointerType === 'mouse') {
-    if (p && p.x > -60 && p.x < trailer.L + 60 && p.z > -60 && p.z < trailer.W + 60) drop();
-  } else if (p) {
-    moveTo(p.x, p.z);
-  }
+  const first = hits.find((h) => h.item !== active);
+  if (first && !first.item.placed) select(first.item);
 });
 
 // ---------- keyboard
+
+const ARROWS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right' };
+
+// Tab: the next piece still in the yard into the hand.
+function pickNext(dir) {
+  const rest = furniture().filter((it) => !it.placed || it === active);
+  if (!rest.length) return;
+  const i = active ? rest.indexOf(active) : dir > 0 ? -1 : 0;
+  select(rest[(i + dir + rest.length) % rest.length]);
+}
 
 addEventListener('keydown', (e) => {
   if (e.target.closest?.('input, textarea')) return;
@@ -754,24 +867,36 @@ addEventListener('keydown', (e) => {
   }
   if (playing) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  const step = e.shiftKey ? 1 : STEP;
+  const arrow = ARROWS[k];
+  if (arrow) {
+    e.preventDefault();
+    if (!e.repeat) press(arrow, e.shiftKey);
+    return;
+  }
+  // everything else fires once per press, holding does not repeat
   const map = {
-    ArrowUp: () => move(1, 0, step), w: () => move(1, 0, step),
-    ArrowDown: () => move(-1, 0, step), s: () => move(-1, 0, step),
-    ArrowLeft: () => move(0, -1, step), a: () => move(0, -1, step),
-    ArrowRight: () => move(0, 1, step), d: () => move(0, 1, step),
     q: () => rotate('yaw', 1), e: () => rotate('yaw', -1),
     r: () => rotate('tilt', 1), f: () => rotate('roll', 1),
     ' ': drop, Enter: drop,
     Escape: () => putBack(),
     Backspace: stepBack, z: stepBack, y: stepForward,
+    Tab: () => pickNext(e.shiftKey ? -1 : 1),
+    k: fetchCarton,
     p: toggleTarp,
   };
   const fn = map[k];
   if (!fn) return;
   e.preventDefault();
-  fn();
+  if (!e.repeat) fn();
 });
+addEventListener('keyup', (e) => {
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (ARROWS[k]) release(ARROWS[k]);
+});
+// a lost focus would otherwise leave an arrow "held"
+addEventListener('blur', releaseAll);
+// clicked buttons give the focus back, so Space and Enter stay with the game
+document.addEventListener('click', (e) => e.target.closest?.('button')?.blur());
 
 // ---------- UI
 
@@ -848,7 +973,7 @@ function renderControls() {
       ? active.problem ?? `${active.def.name}: landet auf ${Math.round(active.landY)} cm`
       : furniture().every((it) => it.placed)
         ? 'Alle Möbel geladen. Passen noch Kartons rein?'
-        : 'Tippe ein Möbelstück im Hof an.';
+        : 'Teil im Hof anklicken oder Tab drücken.';
   $('#hint').classList.toggle('is-bad', !!active?.problem);
   $('#btn-drop').disabled = !active || !!active.problem;
   $('#controls').classList.toggle('is-playing', playing);
@@ -1067,29 +1192,20 @@ $('#win-again').onclick = () => {
   $('#btn-reset').click();
 };
 
-// Control pad: buttons repeat while held.
+// Control pad: the arrow buttons behave like held arrow keys.
 for (const btn of document.querySelectorAll('[data-act]')) {
-  const run = () => {
-    if (playing) return;
-    const [act, a, b] = btn.dataset.act.split(':');
-    if (act === 'move') move(Number(a), Number(b));
-    else if (act === 'rot') rotate(a, Number(b));
-    else if (act === 'drop') drop();
-  };
-  let timer = 0;
-  const stop = () => clearInterval(timer);
+  const [act, a, b] = btn.dataset.act.split(':');
   btn.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     unlockAudio();
-    run();
-    if (btn.dataset.act.startsWith('move')) {
-      timer = setTimeout(() => (timer = setInterval(run, 70)), 320);
-    }
+    if (playing) return;
+    if (act === 'move') press(a);
+    else if (act === 'rot') rotate(a, Number(b));
+    else if (act === 'drop') drop();
   });
-  for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, () => {
-    clearTimeout(timer);
-    stop();
-  });
+  if (act === 'move') {
+    for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(ev, () => release(a));
+  }
 }
 
 // ---------- sound
@@ -1126,6 +1242,38 @@ function meow() {
   o.stop(t + 0.62);
 }
 
+// a soft click when the piece comes to rest at an edge
+function tick() {
+  if (!actx) return;
+  const t = actx.currentTime;
+  const o = actx.createOscillator();
+  const g = actx.createGain();
+  o.type = 'triangle';
+  o.frequency.setValueAtTime(1400, t);
+  g.gain.setValueAtTime(0.06, t);
+  g.gain.exponentialRampToValueAtTime(0.0005, t + 0.05);
+  o.connect(g).connect(actx.destination);
+  o.start(t);
+  o.stop(t + 0.06);
+}
+
+// pushing against a wall: a dull knock and a small shake
+function bump() {
+  shakeT = Math.max(shakeT, 0.12);
+  if (!actx) return;
+  const t = actx.currentTime;
+  const o = actx.createOscillator();
+  const g = actx.createGain();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(180, t);
+  o.frequency.exponentialRampToValueAtTime(90, t + 0.08);
+  g.gain.setValueAtTime(0.18, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+  o.connect(g).connect(actx.destination);
+  o.start(t);
+  o.stop(t + 0.11);
+}
+
 function thud() {
   if (!actx) return;
   const t = actx.currentTime + 0.12;
@@ -1158,7 +1306,10 @@ const clock = new THREE.Clock();
 function frame() {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
+  tickMove(dt);
   const k = 1 - Math.pow(0.0005, dt);
+  // the piece in hand follows more tightly, so arrows feel immediate
+  const kActive = 1 - Math.pow(0.00002, dt);
   for (const it of items) {
     const target = it.target.clone();
     if (it === hovered && !it.placed && it !== active) target.y += 8;
@@ -1166,8 +1317,8 @@ function frame() {
       target.y += Math.sin(t * 3) * 2.5;
       if (shakeT > 0) target.x += Math.sin(t * 60) * 4 * shakeT;
     }
-    it.mesh.position.lerp(target, k);
-    it.mesh.quaternion.slerp(it.targetQ, k);
+    it.mesh.position.lerp(target, it === active ? kActive : k);
+    it.mesh.quaternion.slerp(it.targetQ, it === active ? kActive : k);
   }
   shakeT = Math.max(0, shakeT - dt);
   const sign = stack.userData.sign;
@@ -1197,4 +1348,4 @@ resetCamera();
 refreshUI();
 record();
 frame();
-window.__game = { items, trailer: () => trailer, select, drop, rotate, move, toYard, camera, controls, cat };
+window.__game = { items, trailer: () => trailer, select, drop, rotate, press, release, tickMove, toYard, camera, controls, cat };

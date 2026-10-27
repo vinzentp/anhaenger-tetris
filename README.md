@@ -16,8 +16,9 @@ Dann http://localhost:8123 öffnen.
 
 ## Spielen
 
-- Möbelstück anklicken, über den Anhänger führen, Klick (oder Leertaste) lässt es fallen.
-- Q/E drehen, R/F kippen, Pfeile/WASD schieben (Shift: 1 cm), Esc legt das Teil in der Hand wieder dorthin, wo es herkam (bei einem Fehlklick auch zurück in den Anhänger).
+- Gesteuert wird nur mit den Pfeilen (Tastatur oder Pfeilknöpfe am Handy). Mit der Maus oder per Tippen holt man nur ein Teil aus dem Hof (oder mit Tab), Leertaste lässt es fallen.
+- Pfeil tippen schiebt 5 cm (Shift: 1 cm), halten lässt das Teil gleiten. Wo es bündig an einer Wand oder einem geladenen Teil anliegt, bleibt es kurz stehen.
+- Q/E drehen, R/F kippen, K holt einen Karton, Esc legt das Teil in der Hand wieder dorthin, wo es herkam (bei einem Fehlklick auch zurück in den Anhänger).
 - „Zurück“ (Z) geht bis zu 25 Schritte zurück, „Vor“ (Y) wieder vor. Ein Schritt ist jede Änderung der Ladung, eine eingespielte Lösung zählt als ein Schritt.
 - Grüner Umriss: passt. Rot: zu hoch oder zu groß.
 - Ein Klick auf den Kartonstapel neben dem Anhänger (oder „+ Karton“ im Panel) holt einen Umzugskarton (60 × 33 × 34 cm), beliebig oft. Zurückgelegte Kartons verschwinden wieder.

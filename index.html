@@ -57,9 +57,11 @@
     </section>
     <section class="help">
       <h2>Steuerung</h2>
-      <p>Möbelstück anklicken, mit der Maus über den Anhänger führen, Klick lädt es ein. Am Handy: Teil antippen, auf die Ladefläche tippen schiebt es dorthin, dann Ablegen.</p>
+      <p>Teil im Hof anklicken (oder Tab), mit den Pfeiltasten über die Ladefläche schieben, Leertaste lässt es fallen. Am Handy: Teil antippen, mit den Pfeilknöpfen schieben, dann Ablegen.</p>
       <dl>
-        <dt>Pfeile / WASD</dt><dd>schieben (Shift: 1 cm)</dd>
+        <dt>Pfeile / WASD</dt><dd>tippen: 5 cm, halten: gleiten (Shift: 1 cm)</dd>
+        <dt>Tab</dt><dd>nächstes Teil aus dem Hof</dd>
+        <dt>K</dt><dd>Karton vom Stapel holen</dd>
         <dt>Q / E</dt><dd>drehen</dd>
         <dt>R / F</dt><dd>nach vorn / zur Seite kippen</dd>
         <dt>Leertaste</dt><dd>fallen lassen</dd>
@@ -68,7 +70,7 @@
         <dt>Esc</dt><dd>Teil in der Hand zurücklegen</dd>
         <dt>Ziehen</dt><dd>Kamera drehen, Scrollen zoomt</dd>
       </dl>
-      <p>Grün heißt: passt. Ein geladenes Teil anklicken nimmt es wieder heraus, alles darüber rutscht nach. Der Kartonstapel neben dem Anhänger gibt beliebig viele Umzugskartons her.</p>
+      <p>Grün heißt: passt. Ein Teil bleibt kurz stehen, wo es bündig an einer Wand oder einem anderen Teil anliegt. Der Kartonstapel neben dem Anhänger gibt beliebig viele Umzugskartons her.</p>
     </section>
   </aside>
 
@@ -80,10 +82,10 @@
     </div>
     <div class="pad">
       <div class="dpad">
-        <button type="button" data-act="move:1:0" class="up" aria-label="nach hinten">▲</button>
-        <button type="button" data-act="move:0:-1" class="left" aria-label="nach links">◀</button>
-        <button type="button" data-act="move:0:1" class="right" aria-label="nach rechts">▶</button>
-        <button type="button" data-act="move:-1:0" class="down" aria-label="nach vorn">▼</button>
+        <button type="button" data-act="move:up" class="up" aria-label="nach hinten">▲</button>
+        <button type="button" data-act="move:left" class="left" aria-label="nach links">◀</button>
+        <button type="button" data-act="move:right" class="right" aria-label="nach rechts">▶</button>
+        <button type="button" data-act="move:down" class="down" aria-label="nach vorn">▼</button>
       </div>
       <div class="rot">
         <button type="button" data-act="rot:yaw:1">⟲ Drehen</button>
