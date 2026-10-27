@@ -16,7 +16,7 @@ Dann http://localhost:8123 öffnen.
 
 ## Spielen
 
-- Gesteuert wird nur mit den Pfeilen (Tastatur oder Pfeilknöpfe am Handy). Mit der Maus oder per Tippen holt man nur ein Teil aus dem Hof (oder mit Tab), Leertaste lässt es fallen.
+- Gesteuert wird nur mit den Pfeilen (Tastatur oder Pfeilknöpfe am Handy). Mit der Maus oder per Tippen holt man ein Teil aus dem Hof (oder mit Tab) oder nimmt ein geladenes wieder heraus, Leertaste lässt es fallen.
 - Pfeil tippen schiebt 5 cm (Shift: 1 cm), halten lässt das Teil gleiten. Wo es bündig an einer Wand oder einem geladenen Teil anliegt, bleibt es kurz stehen.
 - Q/E drehen, R/F kippen, K holt einen Karton, Esc legt das Teil in der Hand wieder dorthin, wo es herkam (bei einem Fehlklick auch zurück in den Anhänger).
 - „Zurück“ (Z) geht bis zu 25 Schritte zurück, „Vor“ (Y) wieder vor. Ein Schritt ist jede Änderung der Ladung, eine eingespielte Lösung zählt als ein Schritt.

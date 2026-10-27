@@ -816,8 +816,8 @@ canvas.addEventListener('pointerdown', (e) => {
   down = { x: e.clientX, y: e.clientY };
   unlockAudio();
 });
-// The mouse (or a tap) only picks things up: a piece from the yard, a box from the stack, the cat.
-// Moving and dropping is done with the arrows.
+// The mouse (or a tap) only picks things up: a piece from the yard or the trailer (Zurück puts a
+// misclicked one back), a box from the stack, the cat. Moving and dropping is done with the arrows.
 canvas.addEventListener('pointermove', (e) => {
   if (playing) return;
   const hits = castAt(e);
@@ -825,7 +825,8 @@ canvas.addEventListener('pointermove', (e) => {
   hovered = e.pointerType === 'mouse' ? (yardHit?.item ?? null) : null;
   stackHover = e.pointerType === 'mouse' && hitsStack(hits);
   const catHover = e.pointerType === 'mouse' && !!cat.hit(raycaster);
-  canvas.style.cursor = catHover || stackHover || yardHit ? 'pointer' : '';
+  const pieceHover = hits.some((h) => h.item !== active);
+  canvas.style.cursor = catHover || stackHover || pieceHover ? 'pointer' : '';
 });
 canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
@@ -843,7 +844,7 @@ canvas.addEventListener('pointerup', (e) => {
     return;
   }
   const first = hits.find((h) => h.item !== active);
-  if (first && !first.item.placed) select(first.item);
+  if (first) select(first.item);
 });
 
 // ---------- keyboard
