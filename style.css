@@ -298,3 +298,5 @@ button.wide { width: 100%; }
   .rot { grid-template-columns: repeat(2, minmax(80px, 1fr)); }
   .rot button { font-size: 13px; padding: 8px 6px; }
 }
+
+#controls.is-playing .pad { display: none; }

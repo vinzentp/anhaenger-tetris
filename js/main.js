@@ -52,6 +52,8 @@ scene.add(sun, sun.target);
 scene.add(buildYard());
 FX.init(scene);
 let hovered = null;
+// While the solution plays, every piece is briefly in the hand: user input would move or drop it.
+let playing = false;
 
 // ---------- state
 
@@ -468,6 +470,7 @@ canvas.addEventListener('pointerdown', (e) => {
   unlockAudio();
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (playing) return;
   const hits = castAt(e);
   if (e.pointerType === 'mouse' && !e.buttons && active) {
     const p = loadPoint(hits);
@@ -481,7 +484,7 @@ canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
   const moved = Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6;
   down = null;
-  if (moved) return;
+  if (moved || playing) return;
   const hits = castAt(e);
   if (!active) {
     if (hits.length) select(hits[0].item);
@@ -508,6 +511,7 @@ addEventListener('keydown', (e) => {
     if (e.key === 'Escape') $('#ask-solve').hidden = true;
     return;
   }
+  if (playing) return;
   const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   const step = e.shiftKey ? 1 : STEP;
   const map = {
@@ -548,6 +552,7 @@ function refreshUI() {
     btn.querySelector('.meta').textContent = dims(it);
     btn.querySelector('.state').textContent = state;
     btn.onclick = () => {
+      if (playing) return;
       select(it);
       if (matchMedia('(max-width: 767px)').matches) togglePanel(false);
     };
@@ -562,6 +567,7 @@ function refreshUI() {
   li.innerHTML = `<div><span class="name"></span><span class="meta"></span></div><button type="button" class="primary">+ Karton</button>`;
   li.querySelector('.name').textContent = `${CARTON.name}: ${cartons} geladen`;
   li.querySelector('.meta').textContent = dims({ def: CARTON });
+  li.querySelector('button').disabled = playing;
   li.querySelector('button').onclick = () => {
     fetchCarton();
     if (matchMedia('(max-width: 767px)').matches) togglePanel(false);
@@ -586,13 +592,16 @@ function refreshUI() {
 function renderControls() {
   const c = $('#controls');
   c.classList.toggle('is-idle', !active);
-  $('#hint').textContent = active
-    ? active.problem ?? `${active.def.name}: landet auf ${Math.round(active.landY)} cm`
-    : furniture().every((it) => it.placed)
-      ? 'Alle Möbel geladen. Passen noch Kartons rein?'
-      : 'Tippe ein Möbelstück im Hof an.';
+  $('#hint').textContent = playing
+    ? 'Die Lösung wird eingeladen …'
+    : active
+      ? active.problem ?? `${active.def.name}: landet auf ${Math.round(active.landY)} cm`
+      : furniture().every((it) => it.placed)
+        ? 'Alle Möbel geladen. Passen noch Kartons rein?'
+        : 'Tippe ein Möbelstück im Hof an.';
   $('#hint').classList.toggle('is-bad', !!active?.problem);
   $('#btn-drop').disabled = !active || !!active.problem;
+  $('#controls').classList.toggle('is-playing', playing);
 }
 
 let toastTimer = 0;
@@ -655,8 +664,17 @@ const SOLVE_LIMIT = 30000;
 const solutions = new Map();
 let solving = false;
 
+function setPlaying(on) {
+  playing = on;
+  hovered = null;
+  canvas.style.cursor = '';
+  for (const id of ['#btn-solve', '#btn-reset', '#trailer-form button']) $(id).disabled = on || (id === '#btn-solve' && solving);
+  renderControls();
+  refreshUI();
+}
+
 function showSolution() {
-  if (solving) return;
+  if (solving || playing) return;
   const key = `${trailer.L}x${trailer.W}x${trailer.H}`;
   if (solutions.has(key)) {
     playSolution(solutions.get(key));
@@ -703,21 +721,27 @@ function showSolution() {
 
 // Unloads everything and loads the solution: furniture piece by piece, then the moving boxes quickly.
 function playSolution(best) {
-  $('#btn-reset').click();
+  unloadAll();
   wonShown = true;
+  setPlaying(true);
   const furn = furniture();
   best.placements.forEach((p, i) => {
-    setTimeout(() => {
-      const it = furn.find((x) => x.def === CATALOG[p.index]);
-      select(it);
+    const it = furn.find((x) => x.def === CATALOG[p.index]);
+    const pose = () => {
+      if (active !== it) select(it);
       it.R = p.R;
       it.shape = P.orient(it.def.boxes, it.R);
       it.x = p.x;
       it.z = p.z;
       rebuildGhost();
       updateActive();
-      setTimeout(drop, 500);
-    }, i * 1000);
+    };
+    setTimeout(pose, i * 1000);
+    setTimeout(() => {
+      pose();
+      drop();
+      if (i === best.placements.length - 1 && !best.cartons.length) setPlaying(false);
+    }, i * 1000 + 500);
   });
   const t0 = best.placements.length * 1000 + 300;
   best.cartons.forEach((c, i) => {
@@ -737,6 +761,7 @@ function playSolution(best) {
       if (i % 3 === 0) thud();
       refreshUI();
       if (i === best.cartons.length - 1) {
+        setPlaying(false);
         save();
         toast(`Alle Möbel und ${best.cartons.length} Kartons sind drin.`);
       }
@@ -755,7 +780,7 @@ $('#trailer-form').addEventListener('submit', (e) => {
 });
 $('#btn-tarp').onclick = toggleTarp;
 $('#btn-cam').onclick = resetCamera;
-$('#btn-reset').onclick = () => {
+function unloadAll() {
   for (const it of [...items]) toYard(it, false);
   history = [];
   recomputePlaced();
@@ -764,7 +789,8 @@ $('#btn-reset').onclick = () => {
   refreshPoses();
   refreshUI();
   save();
-};
+}
+$('#btn-reset').onclick = unloadAll;
 // The solution spoils the puzzle, so ask first.
 $('#btn-solve').onclick = () => ($('#ask-solve').hidden = false);
 $('#ask-no').onclick = () => ($('#ask-solve').hidden = true);
@@ -786,6 +812,7 @@ $('#win-again').onclick = () => {
 // Control pad: buttons repeat while held.
 for (const btn of document.querySelectorAll('[data-act]')) {
   const run = () => {
+    if (playing) return;
     const [act, a, b] = btn.dataset.act.split(':');
     if (act === 'move') move(Number(a), Number(b));
     else if (act === 'rot') rotate(a, Number(b));
