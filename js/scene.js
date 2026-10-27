@@ -145,13 +145,21 @@ export function buildTrailer({ L, W, H }) {
   g.add(bm(-4, BED + H, -T - 4, L + 4, BED + H + 4, -T, mat.galv));
   g.add(bm(-4, BED + H, W + T, L + 4, BED + H + 4, W + T + 4, mat.galv));
 
-  // tarp: roof, front and far side; the near side and the rear stay open for loading
-  const top = bm(-8, BED + H + 4, -T - 8, L + 8, BED + H + 5, W + T + 8, mat.tarp);
-  const front = bm(-T - 8, BED + bh, -T - 8, -T - 7, BED + H + 5, W + T + 8, mat.tarp);
-  const far = bm(-8, BED + bh, -T - 9, L + 8, BED + H + 5, -T - 8, mat.tarp);
-  for (const m of [top, front, far]) {
+  // tarp: roof, front and far side; the near side and the rear stay open for loading.
+  // Each panel has its own material and knows which way it faces, so it can fade out when the
+  // camera looks at the load through it.
+  const panels = [
+    [[-8, BED + H + 4, -T - 8, L + 8, BED + H + 5, W + T + 8], [0, 1, 0]],
+    [[-T - 8, BED + bh, -T - 8, -T - 7, BED + H + 5, W + T + 8], [-1, 0, 0]],
+    [[-8, BED + bh, -T - 9, L + 8, BED + H + 5, -T - 8], [0, 0, -1]],
+  ];
+  for (const [box, normal] of panels) {
+    const m = bm(...box, mat.tarp.clone());
     m.castShadow = false;
     m.renderOrder = 2;
+    m.userData.normal = new THREE.Vector3(...normal);
+    m.userData.opacity = mat.tarp.opacity;
+    m.userData.fade = 1;
     tarp.add(m);
   }
   g.add(tarp);

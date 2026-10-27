@@ -63,6 +63,20 @@ const cat = createCat(scene, catObstacles);
 const viewRay = new THREE.Ray();
 const rayHit = new THREE.Vector3();
 
+// Tarp panels the camera looks through from outside fade out, so the load stays in view.
+const toCam = new THREE.Vector3();
+function fadeTarp(dt) {
+  const k = 1 - Math.pow(0.002, dt);
+  for (const m of trailerObj.tarp.children) {
+    const u = m.userData;
+    const blocks = toCam.copy(camera.position).sub(m.position).dot(u.normal) > 0;
+    u.fade += ((blocks ? 0 : 1) - u.fade) * k;
+    if (Math.abs(u.fade - (blocks ? 0 : 1)) < 0.01) u.fade = blocks ? 0 : 1;
+    m.material.opacity = u.opacity * u.fade;
+    m.visible = u.fade > 0;
+  }
+}
+
 function fadeOccluders(dt) {
   const toTarget = camera.position.distanceTo(controls.target);
   viewRay.set(camera.position, controls.target.clone().sub(camera.position).normalize());
@@ -1313,6 +1327,7 @@ function frame() {
   controls.update();
   cat.update(dt, t, camera);
   fadeOccluders(dt);
+  fadeTarp(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
