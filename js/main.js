@@ -64,6 +64,8 @@ let active = null;
 let history = [];
 let placedBoxes = [];
 let wonShown = false;
+// Snapshot from when the piece in hand was taken out of the trailer, so "Zurück" can undo a misclick.
+let taken = null;
 
 // Furniture from the catalog is always there; moving boxes come and go (fetched from the stack, gone
 // again when put back), so items are looked up by uid.
@@ -130,6 +132,72 @@ function removeItem(it) {
 }
 
 for (const def of CATALOG) createItem(def);
+
+// Endless supply of moving boxes: a pallet stack beside the trailer, a click takes a new box from it.
+const [CW, CH, CD] = P.orient(CARTON.boxes, P.IDENT).size;
+const PALLET = { L: 120, W: 80, H: 14 };
+const stack = new THREE.Group();
+{
+  const wood = makeMaterial('wood');
+  const board = (x0, y0, z0, x1, y1, z1) => {
+    const m = new THREE.Mesh(new RoundedBoxGeometry(x1 - x0, y1 - y0, z1 - z0, 2, 0.6), wood);
+    m.position.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    m.castShadow = m.receiveShadow = true;
+    stack.add(m);
+  };
+  for (const z of [0, PALLET.W / 2 - 5, PALLET.W - 10]) board(0, 0, z, PALLET.L, PALLET.H - 2, z + 10);
+  for (let x = 0; x < PALLET.L; x += 20) board(x, PALLET.H - 2, 0, x + 14, PALLET.H, PALLET.W);
+  const card = makeMaterial('carton');
+  const geo = new RoundedBoxGeometry(CW - 0.6, CH - 0.6, CD - 0.6, 3, 0.8);
+  // slightly uneven, like a real stack; the top layer is one box short
+  const jitter = [[1, -1, 2], [-2, 1, -1], [1, 2, 0], [-1, 0, 1]];
+  for (let layer = 0; layer < 3; layer++) {
+    for (let i = 0; i < (layer === 2 ? 3 : 4); i++) {
+      const [dx, dz, rot] = jitter[(i + layer) % 4];
+      const m = new THREE.Mesh(geo, card);
+      m.position.set((i % 2) * CW + CW / 2 + dx, PALLET.H + layer * CH + CH / 2, Math.floor(i / 2) * (PALLET.W - CD) + CD / 2 + dz);
+      m.rotation.y = (rot * Math.PI) / 180;
+      m.castShadow = m.receiveShadow = true;
+      stack.add(m);
+    }
+  }
+  // floating sign so the stack reads as a button
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 112;
+  const g = c.getContext('2d');
+  const draw = () => {
+    g.clearRect(0, 0, c.width, c.height);
+    g.fillStyle = 'rgba(31, 79, 192, 0.92)';
+    g.beginPath();
+    g.roundRect(6, 6, 308, 100, 50);
+    g.fill();
+    g.fillStyle = '#fff';
+    g.font = '800 52px Nunito, sans-serif';
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.fillText('+ Karton', 160, 58);
+  };
+  draw();
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // redraw once the web font is there
+  document.fonts?.load('800 52px Nunito').then(() => {
+    draw();
+    tex.needsUpdate = true;
+  });
+  const sign = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false }));
+  sign.scale.set(64, 22.4, 1);
+  sign.position.set(PALLET.L / 2, PALLET.H + 3 * CH + 34, PALLET.W / 2);
+  stack.add(sign);
+  stack.userData.sign = sign;
+}
+scene.add(stack);
+let stackHover = false;
+
+function placeStack() {
+  stack.position.set(trailer.L + 70, 0, trailer.W / 2 - PALLET.W / 2);
+}
 
 function setHighlight(item, on) {
   for (const m of item.mesh.userData.mats) {
@@ -250,8 +318,14 @@ function updateActive() {
 
 function select(item) {
   if (active === item) return;
-  if (active) toYard(active, false);
+  if (active) putBack(false);
+  taken = null;
   if (item.placed) {
+    taken = {
+      item, R: item.R, x: item.x, y: item.y, z: item.z,
+      ys: items.filter((it) => it.placed).map((it) => [it, it.y]),
+      history: history.slice(),
+    };
     item.placed = false;
     history = history.filter((u) => u !== item.uid);
     settle();
@@ -267,7 +341,34 @@ function select(item) {
   refreshUI();
 }
 
+// Puts the piece in hand back where it came from: into the trailer at its old spot (everything that
+// slid down returns too) or into the yard.
+function putBack(refresh = true) {
+  if (!active) return;
+  if (taken?.item !== active) {
+    toYard(active, refresh);
+    return;
+  }
+  const it = active;
+  Object.assign(it, { R: taken.R, x: taken.x, y: taken.y, z: taken.z, placed: true });
+  it.shape = P.orient(it.def.boxes, it.R);
+  for (const [o, y] of taken.ys) o.y = y;
+  history = taken.history;
+  taken = null;
+  setHighlight(it, false);
+  active = null;
+  recomputePlaced();
+  if (refresh) {
+    rebuildGhost();
+    updateActive();
+    refreshPoses();
+    refreshUI();
+    save();
+  }
+}
+
 function toYard(item, refresh = true) {
+  if (taken?.item === item) taken = null;
   if (isCarton(item)) {
     if (active === item) active = null;
     history = history.filter((u) => u !== item.uid);
@@ -315,6 +416,7 @@ function drop() {
     return;
   }
   const it = active;
+  taken = null;
   it.y = it.landY;
   it.placed = true;
   history.push(it.uid);
@@ -332,9 +434,64 @@ function drop() {
   if (furniture().every((x) => x.placed) && !wonShown) setTimeout(showWin, 450);
 }
 
-function undo() {
-  const uid = history[history.length - 1];
-  if (uid !== undefined) select(byUid(uid));
+// ---------- history: up to 25 steps back and forward again
+
+const STEPS = 25;
+const timeline = [];
+let cursor = -1;
+let restoring = false;
+
+// Called with every save: a load that differs from the current step becomes a new step.
+function record() {
+  if (playing || restoring) return;
+  const snap = JSON.stringify(snapshot());
+  if (timeline[cursor] === snap) return;
+  timeline.splice(cursor + 1);
+  timeline.push(snap);
+  if (timeline.length > STEPS + 1) timeline.shift();
+  cursor = timeline.length - 1;
+  renderControls();
+}
+
+function restore(data) {
+  restoring = true;
+  if (active) setHighlight(active, false);
+  active = null;
+  taken = null;
+  for (const it of [...items]) {
+    if (isCarton(it)) removeItem(it);
+    else Object.assign(it, { placed: false, R: P.IDENT, shape: P.orient(it.def.boxes, P.IDENT) });
+  }
+  const t = data.trailer;
+  if (t.L !== trailer.L || t.W !== trailer.W || t.H !== trailer.H) applyTrailer({ ...t });
+  placeAll(data.placed);
+  recomputePlaced();
+  wonShown = furniture().every((it) => it.placed);
+  rebuildGhost();
+  updateActive();
+  refreshPoses();
+  refreshUI();
+  save();
+  restoring = false;
+}
+
+// Zurück: a piece in hand goes back where it came from first, otherwise one step back.
+function stepBack() {
+  if (playing) return;
+  if (active) {
+    putBack();
+    return;
+  }
+  if (cursor <= 0) return;
+  cursor--;
+  restore(JSON.parse(timeline[cursor]));
+}
+
+function stepForward() {
+  if (playing || cursor >= timeline.length - 1) return;
+  if (active) putBack();
+  cursor++;
+  restore(JSON.parse(timeline[cursor]));
 }
 
 // Camera-relative axes on the floor, snapped to the trailer axes.
@@ -390,6 +547,7 @@ function applyTrailer(dims) {
     if (o.material?.metalness > 0.3) o.material.envMap = envMap;
   });
   scene.add(trailerObj.group);
+  placeStack();
 
   // keep what still fits, the rest goes back to the yard
   const placed = items.filter((it) => it.placed).sort((a, b) => a.y - b.y);
@@ -413,16 +571,21 @@ function applyTrailer(dims) {
 
 // ---------- persistence
 
+function snapshot() {
+  return {
+    trailer: { ...trailer },
+    // placed pieces in loading order, so taking out the last one still works after a reload
+    placed: items.filter((it) => it.placed)
+      .sort((a, b) => history.indexOf(a.uid) - history.indexOf(b.uid))
+      .map(({ def, R, x, y, z }) => ({ id: def.id, R, x, y, z })),
+  };
+}
+
 function save() {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({
-      trailer,
-      // placed pieces in loading order, so undo still works after a reload
-      placed: items.filter((it) => it.placed)
-        .sort((a, b) => history.indexOf(a.uid) - history.indexOf(b.uid))
-        .map(({ def, R, x, y, z }) => ({ id: def.id, R, x, y, z })),
-    }));
+    localStorage.setItem(SAVE_KEY, JSON.stringify(snapshot()));
   } catch { /* storage unavailable */ }
+  record();
 }
 
 function load() {
@@ -431,15 +594,19 @@ function load() {
     data = JSON.parse(localStorage.getItem(SAVE_KEY));
   } catch { /* ignore */ }
   if (!data) return { ...DEFAULT_TRAILER };
+  placeAll(data.placed ?? []);
+  return data.trailer ?? { ...DEFAULT_TRAILER };
+}
+
+function placeAll(placed) {
   history = [];
-  for (const p of data.placed ?? []) {
+  for (const p of placed) {
     const it = p.id === CARTON.id ? createItem(CARTON) : items.find((x) => x.def.id === p.id && !x.placed);
     if (!it) continue;
     Object.assign(it, { R: p.R, x: p.x, y: p.y, z: p.z, placed: true });
     it.shape = P.orient(it.def.boxes, it.R);
     history.push(it.uid);
   }
-  return data.trailer ?? { ...DEFAULT_TRAILER };
 }
 
 // ---------- pointer input
@@ -454,6 +621,14 @@ function castAt(e) {
   raycaster.setFromCamera(ndc, camera);
   const meshes = items.flatMap((it) => it.mesh.children);
   return raycaster.intersectObjects(meshes, false).map((h) => ({ item: byUid(h.object.userData.uid), point: h.point }));
+}
+
+// True when the carton stack is in front of every piece under the pointer (uses the last castAt ray).
+function hitsStack(hits) {
+  const s = raycaster.intersectObject(stack, true)[0];
+  if (!s) return false;
+  const first = hits.find((h) => h.item !== active);
+  return !first || s.distance < first.point.distanceTo(raycaster.ray.origin);
 }
 
 // Point on the load (placed pieces or floor) under the pointer, ignoring the piece in hand.
@@ -478,7 +653,8 @@ canvas.addEventListener('pointermove', (e) => {
   }
   const yardHit = hits.find((h) => !h.item.placed && h.item !== active);
   hovered = e.pointerType === 'mouse' ? (yardHit?.item ?? null) : null;
-  canvas.style.cursor = yardHit || (!active && hits.length) ? 'pointer' : active ? 'crosshair' : '';
+  stackHover = e.pointerType === 'mouse' && hitsStack(hits);
+  canvas.style.cursor = stackHover || yardHit || (!active && hits.length) ? 'pointer' : active ? 'crosshair' : '';
 });
 canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
@@ -486,6 +662,10 @@ canvas.addEventListener('pointerup', (e) => {
   down = null;
   if (moved || playing) return;
   const hits = castAt(e);
+  if (hitsStack(hits)) {
+    fetchCarton();
+    return;
+  }
   if (!active) {
     if (hits.length) select(hits[0].item);
     return;
@@ -522,8 +702,8 @@ addEventListener('keydown', (e) => {
     q: () => rotate('yaw', 1), e: () => rotate('yaw', -1),
     r: () => rotate('tilt', 1), f: () => rotate('roll', 1),
     ' ': drop, Enter: drop,
-    Escape: () => active && toYard(active),
-    Backspace: undo, z: undo,
+    Escape: () => putBack(),
+    Backspace: stepBack, z: stepBack, y: stepForward,
     p: toggleTarp,
   };
   const fn = map[k];
@@ -611,6 +791,8 @@ function renderControls() {
   $('#hint').classList.toggle('is-bad', !!active?.problem);
   $('#btn-drop').disabled = !active || !!active.problem;
   $('#controls').classList.toggle('is-playing', playing);
+  $('#btn-back').disabled = playing || (!active && cursor <= 0);
+  $('#btn-fwd').disabled = playing || cursor >= timeline.length - 1;
 }
 
 let toastTimer = 0;
@@ -635,9 +817,11 @@ function toggleTarp() {
 
 function resetCamera() {
   const { L, W } = trailer;
-  controls.target.set(L / 2, BED + 20, W / 2 + 70);
+  // centre between trailer and carton stack, so both are in view
+  const cx = (L + 70 + PALLET.L) / 2;
+  controls.target.set(cx, BED + 20, W / 2 + 70);
   const narrow = innerWidth < innerHeight;
-  camera.position.set(L / 2 + 260, BED + (narrow ? 620 : 420), W + (narrow ? 820 : 560));
+  camera.position.set(cx + (narrow ? 360 : 260), BED + (narrow ? 820 : 420), W + (narrow ? 1060 : 560));
   controls.update();
 }
 
@@ -648,9 +832,9 @@ function togglePanel(open) {
 // Takes a new moving box from the stack and puts it in the hand.
 function fetchCarton() {
   const it = createItem(CARTON);
-  it.mesh.position.set(trailer.L / 2, 0, trailer.W + 90);
+  // comes flying off the top of the stack
+  it.mesh.position.copy(stack.position).add(new THREE.Vector3(PALLET.L / 2 - CW / 2, PALLET.H + 3 * CH, PALLET.W / 2 - CD / 2));
   select(it);
-  it.mesh.position.copy(it.target).setY(0);
 }
 
 function showWin() {
@@ -680,6 +864,8 @@ function setPlaying(on) {
   for (const id of ['#btn-solve', '#btn-reset', '#trailer-form button']) $(id).disabled = on || (id === '#btn-solve' && solving);
   renderControls();
   refreshUI();
+  // the whole solution is one step
+  if (!on) record();
 }
 
 function showSolution() {
@@ -730,9 +916,9 @@ function showSolution() {
 
 // Unloads everything and loads the solution: furniture piece by piece, then the moving boxes quickly.
 function playSolution(best) {
+  setPlaying(true);
   unloadAll();
   wonShown = true;
-  setPlaying(true);
   const furn = furniture();
   best.placements.forEach((p, i) => {
     const it = furn.find((x) => x.def === CATALOG[p.index]);
@@ -811,6 +997,8 @@ $('#ask-yes').onclick = () => {
   if (matchMedia('(max-width: 767px)').matches) togglePanel(false);
   showSolution();
 };
+$('#btn-back').onclick = stepBack;
+$('#btn-fwd').onclick = stepForward;
 $('#panel-toggle').onclick = () => togglePanel(!$('#panel').classList.contains('open'));
 $('#win-close').onclick = () => ($('#win').hidden = true);
 $('#win-again').onclick = () => {
@@ -826,7 +1014,6 @@ for (const btn of document.querySelectorAll('[data-act]')) {
     if (act === 'move') move(Number(a), Number(b));
     else if (act === 'rot') rotate(a, Number(b));
     else if (act === 'drop') drop();
-    else if (act === 'yard') active && toYard(active);
   };
   let timer = 0;
   const stop = () => clearInterval(timer);
@@ -897,6 +1084,9 @@ function frame() {
     it.mesh.quaternion.slerp(it.targetQ, k);
   }
   shakeT = Math.max(0, shakeT - dt);
+  const sign = stack.userData.sign;
+  sign.position.y = PALLET.H + 3 * CH + 34 + Math.sin(t * 2.2) * 3;
+  sign.scale.setScalar(stackHover && !playing ? 1.12 : 1).multiply(new THREE.Vector3(64, 22.4, 1));
   FX.update(dt);
   controls.update();
   renderer.render(scene, camera);
@@ -917,6 +1107,6 @@ for (const it of items) {
 }
 resetCamera();
 refreshUI();
-renderControls();
+record();
 frame();
 window.__game = { items, trailer: () => trailer, select, drop, rotate, move, toYard };

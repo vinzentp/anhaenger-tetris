@@ -17,9 +17,10 @@ Dann http://localhost:8123 öffnen.
 ## Spielen
 
 - Möbelstück anklicken, über den Anhänger führen, Klick (oder Leertaste) lässt es fallen.
-- Q/E drehen, R/F kippen, Pfeile/WASD schieben (Shift: 1 cm), Esc zurück in den Hof, Z nimmt das letzte Teil wieder heraus.
+- Q/E drehen, R/F kippen, Pfeile/WASD schieben (Shift: 1 cm), Esc legt das Teil in der Hand wieder dorthin, wo es herkam (bei einem Fehlklick auch zurück in den Anhänger).
+- „Zurück“ (Z) geht bis zu 25 Schritte zurück, „Vor“ (Y) wieder vor. Ein Schritt ist jede Änderung der Ladung, eine eingespielte Lösung zählt als ein Schritt.
 - Grüner Umriss: passt. Rot: zu hoch oder zu groß.
-- „+ Karton“ holt einen Umzugskarton (60 × 33 × 34 cm), beliebig oft. Zurückgelegte Kartons verschwinden wieder.
+- Ein Klick auf den Kartonstapel neben dem Anhänger (oder „+ Karton“ im Panel) holt einen Umzugskarton (60 × 33 × 34 cm), beliebig oft. Zurückgelegte Kartons verschwinden wieder.
 - „Lösung zeigen“ sucht eine Packung, die alle Möbel und möglichst viele Kartons unterbringt (bis zu 30 s, im Hintergrund), und lädt sie ein.
 - Die Anhängermaße (Innenmaß) sind im Panel einstellbar. Der Stand wird im Browser gespeichert.
 

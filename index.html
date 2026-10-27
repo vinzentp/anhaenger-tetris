@@ -63,16 +63,21 @@
         <dt>Q / E</dt><dd>drehen</dd>
         <dt>R / F</dt><dd>nach vorn / zur Seite kippen</dd>
         <dt>Leertaste</dt><dd>fallen lassen</dd>
-        <dt>Esc</dt><dd>zurück in den Hof</dd>
-        <dt>Z</dt><dd>letztes Teil wieder rausnehmen</dd>
+        <dt>Z / Zurück</dt><dd>einen Schritt zurück (bis zu 25); ein Teil in der Hand kommt erst an seinen alten Platz</dd>
+        <dt>Y / Vor</dt><dd>wieder einen Schritt vor</dd>
+        <dt>Esc</dt><dd>Teil in der Hand zurücklegen</dd>
         <dt>Ziehen</dt><dd>Kamera drehen, Scrollen zoomt</dd>
       </dl>
-      <p>Grün heißt: passt. Ein geladenes Teil anklicken nimmt es wieder heraus, alles darüber rutscht nach.</p>
+      <p>Grün heißt: passt. Ein geladenes Teil anklicken nimmt es wieder heraus, alles darüber rutscht nach. Der Kartonstapel neben dem Anhänger gibt beliebig viele Umzugskartons her.</p>
     </section>
   </aside>
 
   <div id="controls" class="is-idle">
-    <div id="hint"></div>
+    <div class="bar">
+      <button type="button" id="btn-back" title="Zurück (Z)">↶ Zurück</button>
+      <div id="hint"></div>
+      <button type="button" id="btn-fwd" title="Vor (Y)">Vor ↷</button>
+    </div>
     <div class="pad">
       <div class="dpad">
         <button type="button" data-act="move:1:0" class="up" aria-label="nach hinten">▲</button>
@@ -85,8 +90,7 @@
         <button type="button" data-act="rot:yaw:-1">⟳ Drehen</button>
         <button type="button" data-act="rot:tilt:1">⤵ Kippen</button>
         <button type="button" data-act="rot:roll:1">↷ Seitlich</button>
-        <button type="button" data-act="yard" class="ghost">Zurück</button>
-        <button type="button" data-act="drop" id="btn-drop" class="primary">Ablegen</button>
+        <button type="button" data-act="drop" id="btn-drop" class="primary wide-cell">Ablegen</button>
       </div>
     </div>
   </div>

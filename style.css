@@ -221,7 +221,10 @@ button.wide { width: 100%; }
   max-width: calc(100vw - 24px);
 }
 #controls.is-idle .pad { display: none; }
-#hint { font-size: 13px; text-align: center; color: var(--muted); min-height: 1.2em; }
+#hint { flex: 1; font-size: 13px; text-align: center; color: var(--muted); min-height: 1.2em; }
+.bar { display: flex; align-items: center; gap: 8px; }
+.bar button { white-space: nowrap; padding: 6px 10px; font-size: 13px; }
+.rot .wide-cell { grid-column: 1 / -1; }
 #hint.is-bad { color: var(--red); font-weight: 600; }
 
 .pad { display: flex; gap: 12px; align-items: center; }
