@@ -305,3 +305,8 @@ button.wide { width: 100%; }
 #controls.is-playing .pad { display: none; }
 #yard-list .group { font-size: 12px; font-weight: 800; color: var(--muted); margin: 6px 2px 0; }
 #yard-list .group:first-child { margin-top: 0; }
+
+/* camera flash for the photo button */
+#flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 20; }
+#flash.go { animation: flash 0.45s ease-out; }
+@keyframes flash { from { opacity: 0.85; } to { opacity: 0; } }

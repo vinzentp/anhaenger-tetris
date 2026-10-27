@@ -896,6 +896,7 @@ addEventListener('keydown', (e) => {
     Backspace: stepBack, z: stepBack, y: stepForward,
     Tab: () => pickNext(e.shiftKey ? -1 : 1),
     k: fetchCarton,
+    o: takePhoto,
     p: toggleTarp,
   };
   const fn = map[k];
@@ -1013,6 +1014,70 @@ function toggleTarp() {
   tarpVisible = !tarpVisible;
   trailerObj.tarp.visible = tarpVisible;
   $('#btn-tarp').textContent = tarpVisible ? 'Plane ausblenden' : 'Plane einblenden';
+}
+
+// Saves the current 3D view as a PNG with a caption (on phones it opens the share sheet instead).
+async function takePhoto() {
+  // the side panel is not part of the picture, so render without the offset that makes room for it
+  const ghostWas = ghost.visible;
+  ghost.visible = false;
+  camera.clearViewOffset();
+  camera.updateProjectionMatrix();
+  renderer.render(scene, camera);
+  const src = renderer.domElement;
+  const out = document.createElement('canvas');
+  out.width = src.width;
+  out.height = src.height;
+  const g = out.getContext('2d');
+  g.drawImage(src, 0, 0);
+  ghost.visible = ghostWas;
+  resize();
+
+  // caption: what is loaded and how full it is
+  const s = out.width / innerWidth;
+  const text = ['🛋️ Anhänger-Tetris', $('#st-items').textContent, $('#st-cartons').textContent, $('#st-vol').textContent,
+    `${trailer.L} × ${trailer.W} × ${trailer.H} cm`].join('  ·  ');
+  g.font = `800 ${15 * s}px Nunito, sans-serif`;
+  const w = g.measureText(text).width + 32 * s;
+  const h = 34 * s;
+  const x = (out.width - w) / 2;
+  const y = out.height - h - 16 * s;
+  g.fillStyle = 'rgba(255, 252, 247, 0.88)';
+  g.beginPath();
+  g.roundRect(x, y, w, h, h / 2);
+  g.fill();
+  g.fillStyle = '#1d2330';
+  g.textBaseline = 'middle';
+  g.fillText(text, x + 16 * s, y + h / 2 + s);
+
+  const flash = $('#flash');
+  flash.classList.remove('go');
+  void flash.offsetWidth;
+  flash.classList.add('go');
+
+  const blob = await new Promise((r) => out.toBlob(r, 'image/png'));
+  if (!blob) {
+    toast('Das Foto hat nicht geklappt.');
+    return;
+  }
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const name = `anhaenger-tetris-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}.png`;
+  const file = new File([blob], name, { type: 'image/png' });
+  if (matchMedia('(pointer: coarse)').matches && navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: 'Anhänger-Tetris' });
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+    }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  toast('Foto gespeichert');
 }
 
 function resetCamera() {
@@ -1174,6 +1239,7 @@ $('#trailer-form').addEventListener('submit', (e) => {
   toast(`Anhänger: ${trailer.L} × ${trailer.W} × ${trailer.H} cm`);
 });
 $('#btn-tarp').onclick = toggleTarp;
+$('#btn-photo').onclick = takePhoto;
 $('#btn-cam').onclick = resetCamera;
 function unloadAll() {
   for (const it of [...items]) toYard(it, false);
