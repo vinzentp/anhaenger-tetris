@@ -59,7 +59,7 @@ const occluders = yard.userData.buildings.map((group) => {
   group.traverse((o) => o.material && mats.add(o.material));
   return { group, box: new THREE.Box3().setFromObject(group).expandByScalar(20), mats: [...mats], fade: 1 };
 });
-const cat = createCat(scene);
+const cat = createCat(scene, catObstacles);
 const viewRay = new THREE.Ray();
 const rayHit = new THREE.Vector3();
 
@@ -228,6 +228,26 @@ const stack = new THREE.Group();
 }
 scene.add(stack);
 let stackHover = false;
+
+// What the cat walks around (and may rub against): trailer, drawbar, stack, walls, pieces in the yard.
+function catObstacles() {
+  const { L, W } = trailer;
+  const s = stack.position;
+  const list = [
+    { x0: -2, x1: L + 8, z0: -4, z1: W + 4, rub: false },
+    { x0: -152, x1: 0, z0: W * 0.2, z1: W * 0.8, rub: false },
+    { x0: s.x, x1: s.x + PALLET.L, z0: s.z, z1: s.z + PALLET.W, rub: true },
+    { x0: -600, x1: 900, z0: -442, z1: -418, rub: true },
+    { x0: 778, x1: 822, z0: -400, z1: 520, rub: true },
+  ];
+  const bb = new THREE.Box3();
+  for (const it of items) {
+    if (it.placed || it === active) continue;
+    bb.setFromObject(it.mesh);
+    list.push({ x0: bb.min.x, x1: bb.max.x, z0: bb.min.z, z1: bb.max.z, rub: true });
+  }
+  return list;
+}
 
 function placeStack() {
   stack.position.set(trailer.L + 70, 0, trailer.W / 2 - PALLET.W / 2);
@@ -582,7 +602,7 @@ function applyTrailer(dims) {
   });
   scene.add(trailerObj.group);
   placeStack();
-  cat.setRoute(trailer);
+  cat.setArea(trailer);
 
   // keep what still fits, the rest goes back to the yard
   const placed = items.filter((it) => it.placed).sort((a, b) => a.y - b.y);

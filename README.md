@@ -23,7 +23,7 @@ Dann http://localhost:8123 öffnen.
 - Ein Klick auf den Kartonstapel neben dem Anhänger (oder „+ Karton“ im Panel) holt einen Umzugskarton (60 × 33 × 34 cm), beliebig oft. Zurückgelegte Kartons verschwinden wieder.
 - „Lösung zeigen“ sucht eine Packung, die alle Möbel und möglichst viele Kartons unterbringt (bis zu 30 s, im Hintergrund), und lädt sie ein.
 - Fährt die Kamera in ein Gebäude oder steht eins im Blick, wird es ausgeblendet.
-- Im Hof streunt eine schwarze Katze herum. Anklicken lohnt sich.
+- Im Hof lebt eine schwarze Katze: Sie streunt herum, setzt sich, legt sich hin, räkelt sich auf dem Rücken und streicht an Möbeln, Kartons und Wänden entlang. Anklicken lohnt sich.
 - Die Anhängermaße (Innenmaß) sind im Panel einstellbar. Der Stand wird im Browser gespeichert.
 
 ## Möbel hinzufügen
