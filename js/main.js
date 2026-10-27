@@ -7,6 +7,7 @@ import * as P from './physics.js';
 import { BED, buildTrailer, buildYard } from './scene.js';
 import * as TX from './textures.js';
 import * as FX from './effects.js';
+import { createCat } from './cat.js';
 
 const STEP = 5;
 const HOVER = 14;
@@ -49,7 +50,40 @@ sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.6;
 sun.shadow.radius = 4;
 scene.add(sun, sun.target);
-scene.add(buildYard());
+const yard = buildYard();
+scene.add(yard);
+// Buildings fade out while the camera is inside one or one stands between camera and trailer.
+const occluders = yard.userData.buildings.map((group) => {
+  group.updateMatrixWorld(true);
+  const mats = new Set();
+  group.traverse((o) => o.material && mats.add(o.material));
+  return { group, box: new THREE.Box3().setFromObject(group).expandByScalar(20), mats: [...mats], fade: 1 };
+});
+const cat = createCat(scene);
+const viewRay = new THREE.Ray();
+const rayHit = new THREE.Vector3();
+
+function fadeOccluders(dt) {
+  const toTarget = camera.position.distanceTo(controls.target);
+  viewRay.set(camera.position, controls.target.clone().sub(camera.position).normalize());
+  const k = 1 - Math.pow(0.002, dt);
+  for (const o of occluders) {
+    const blocks = o.box.containsPoint(camera.position) ||
+      (viewRay.intersectBox(o.box, rayHit) && rayHit.distanceTo(camera.position) < toTarget);
+    o.fade += ((blocks ? 0 : 1) - o.fade) * k;
+    if (Math.abs(o.fade - (blocks ? 0 : 1)) < 0.01) o.fade = blocks ? 0 : 1;
+    o.group.visible = o.fade > 0;
+    for (const m of o.mats) {
+      const see = o.fade < 1;
+      if (m.transparent !== see) {
+        m.transparent = see;
+        m.needsUpdate = true;
+      }
+      m.opacity = o.fade;
+      m.depthWrite = o.fade > 0.5;
+    }
+  }
+}
 FX.init(scene);
 let hovered = null;
 // While the solution plays, every piece is briefly in the hand: user input would move or drop it.
@@ -548,6 +582,7 @@ function applyTrailer(dims) {
   });
   scene.add(trailerObj.group);
   placeStack();
+  cat.setRoute(trailer);
 
   // keep what still fits, the rest goes back to the yard
   const placed = items.filter((it) => it.placed).sort((a, b) => a.y - b.y);
@@ -654,7 +689,8 @@ canvas.addEventListener('pointermove', (e) => {
   const yardHit = hits.find((h) => !h.item.placed && h.item !== active);
   hovered = e.pointerType === 'mouse' ? (yardHit?.item ?? null) : null;
   stackHover = e.pointerType === 'mouse' && hitsStack(hits);
-  canvas.style.cursor = stackHover || yardHit || (!active && hits.length) ? 'pointer' : active ? 'crosshair' : '';
+  const catHover = e.pointerType === 'mouse' && !!cat.hit(raycaster);
+  canvas.style.cursor = catHover || stackHover || yardHit || (!active && hits.length) ? 'pointer' : active ? 'crosshair' : '';
 });
 canvas.addEventListener('pointerup', (e) => {
   if (!down) return;
@@ -662,6 +698,11 @@ canvas.addEventListener('pointerup', (e) => {
   down = null;
   if (moved || playing) return;
   const hits = castAt(e);
+  if (cat.hit(raycaster)) {
+    cat.poke();
+    meow();
+    return;
+  }
   if (hitsStack(hits)) {
     fetchCarton();
     return;
@@ -1040,6 +1081,31 @@ function unlockAudio() {
     if (actx.state === 'suspended') actx.resume();
   } catch { /* no audio */ }
 }
+// Two short gliding tones through a vowel-like filter: close enough to a meow.
+function meow() {
+  if (!actx) return;
+  const t = actx.currentTime + 0.02;
+  const o = actx.createOscillator();
+  const f = actx.createBiquadFilter();
+  const g = actx.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(520, t);
+  o.frequency.linearRampToValueAtTime(820, t + 0.14);
+  o.frequency.exponentialRampToValueAtTime(430, t + 0.55);
+  f.type = 'bandpass';
+  f.Q.value = 3;
+  f.frequency.setValueAtTime(900, t);
+  f.frequency.linearRampToValueAtTime(1800, t + 0.15);
+  f.frequency.linearRampToValueAtTime(700, t + 0.55);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(0.35, t + 0.06);
+  g.gain.setValueAtTime(0.35, t + 0.35);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+  o.connect(f).connect(g).connect(actx.destination);
+  o.start(t);
+  o.stop(t + 0.62);
+}
+
 function thud() {
   if (!actx) return;
   const t = actx.currentTime + 0.12;
@@ -1089,6 +1155,8 @@ function frame() {
   sign.scale.setScalar(stackHover && !playing ? 1.12 : 1).multiply(new THREE.Vector3(64, 22.4, 1));
   FX.update(dt);
   controls.update();
+  cat.update(dt, t, camera);
+  fadeOccluders(dt);
   renderer.render(scene, camera);
   requestAnimationFrame(frame);
 }
@@ -1109,4 +1177,4 @@ resetCamera();
 refreshUI();
 record();
 frame();
-window.__game = { items, trailer: () => trailer, select, drop, rotate, move, toYard };
+window.__game = { items, trailer: () => trailer, select, drop, rotate, move, toYard, camera, controls, cat };

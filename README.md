@@ -22,6 +22,8 @@ Dann http://localhost:8123 öffnen.
 - Grüner Umriss: passt. Rot: zu hoch oder zu groß.
 - Ein Klick auf den Kartonstapel neben dem Anhänger (oder „+ Karton“ im Panel) holt einen Umzugskarton (60 × 33 × 34 cm), beliebig oft. Zurückgelegte Kartons verschwinden wieder.
 - „Lösung zeigen“ sucht eine Packung, die alle Möbel und möglichst viele Kartons unterbringt (bis zu 30 s, im Hintergrund), und lädt sie ein.
+- Fährt die Kamera in ein Gebäude oder steht eins im Blick, wird es ausgeblendet.
+- Im Hof streunt eine schwarze Katze herum. Anklicken lohnt sich.
 - Die Anhängermaße (Innenmaß) sind im Panel einstellbar. Der Stand wird im Browser gespeichert.
 
 ## Möbel hinzufügen
@@ -34,4 +36,5 @@ Jedes Möbelstück ist in `js/furniture.js` eine Liste achsenparalleler Quader i
 - `js/physics.js`: 90°-Drehungen, Fallen lassen, Kollision
 - `js/solver.js`: Lösungssuche, läuft in `js/solver-worker.js`. Höhenkarte im 1-cm-Raster; Möbel per Beam-Search (alle 24 Drehungen, Positionen an Wänden und Kanten, bewertet nach verlorenem Platz), die Kissen danach der Größe nach in die besten Lücken, zuletzt Kartons gierig an die jeweils tiefste freie Stelle
 - `js/scene.js`: Anhänger mit Bordwänden, Spriegel und Plane, Hof
+- `js/cat.js`: die Katze
 - `js/main.js`: Spiellogik, Eingabe, UI

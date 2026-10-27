@@ -229,38 +229,42 @@ export function buildYard() {
   ground.receiveShadow = true;
   g.add(ground);
 
+  // every building gets its own materials, so it can fade out alone when it blocks the view
   const plankTex = TX.planks();
   plankTex.repeat.set(6, 1);
-  const wood = new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.9 });
-  const darkWood = new THREE.MeshStandardMaterial({ color: 0x3d2416, roughness: 0.9 });
   const tileTex = TX.roofTiles();
   tileTex.repeat.set(14, 4);
-  const roof = new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.8 });
-  const gutter = new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.7, roughness: 0.4 });
+  const roofMat = () => new THREE.MeshStandardMaterial({ map: tileTex, roughness: 0.8 });
 
   // garage row behind the trailer, with an open gate
+  const garage = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.9 });
+  const darkWood = new THREE.MeshStandardMaterial({ color: 0x3d2416, roughness: 0.9 });
+  const gutter = new THREE.MeshStandardMaterial({ color: 0xb87333, metalness: 0.7, roughness: 0.4 });
   const z0 = -420;
-  g.add(bm(-600, 0, z0 - 20, 900, 250, z0, wood));
-  g.add(bm(-40, 0, z0 - 1, 260, 215, z0 + 1, darkWood));
-  for (const x of [-45, 260]) g.add(bm(x - 6, 0, z0, x + 6, 220, z0 + 6, darkWood));
-  const r = bm(-660, -8, -50, 960, 8, 270, roof);
+  garage.add(bm(-600, 0, z0 - 20, 900, 250, z0, wood));
+  garage.add(bm(-40, 0, z0 - 1, 260, 215, z0 + 1, darkWood));
+  for (const x of [-45, 260]) garage.add(bm(x - 6, 0, z0, x + 6, 220, z0 + 6, darkWood));
+  const r = bm(-660, -8, -50, 960, 8, 270, roofMat());
   r.rotation.x = 0.33;
   r.position.set(150, 300, z0 + 20);
-  g.add(r);
+  garage.add(r);
   const gut = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 1620, 12), gutter);
   gut.rotation.z = Math.PI / 2;
   gut.position.set(150, 250, z0 + 150);
-  g.add(gut);
+  garage.add(gut);
+  g.add(garage);
 
   // barn on the right with greenery
-  const barnTex = TX.planks();
-  const barnWood = new THREE.MeshStandardMaterial({ map: barnTex, roughness: 0.9 });
-  const barn = bm(780, 0, -400, 820, 330, 520, barnWood);
-  g.add(barn);
-  const br = bm(-40, -8, -460, 220, 8, 1000, roof);
+  const barn = new THREE.Group();
+  const barnWood = new THREE.MeshStandardMaterial({ map: TX.planks(), roughness: 0.9 });
+  barn.add(bm(780, 0, -400, 820, 330, 520, barnWood));
+  const br = bm(-40, -8, -460, 220, 8, 1000, roofMat());
   br.rotation.z = -0.35;
   br.position.set(760, 390, 60);
-  g.add(br);
+  barn.add(br);
+  g.add(barn);
+  g.userData.buildings = [garage, barn];
 
   g.add(bush(700, 380, 70, null, 1));
   g.add(bush(735, 200, 90, null, 2));
