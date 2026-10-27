@@ -10,8 +10,8 @@ import * as FX from './effects.js';
 
 const STEP = 5;
 const HOVER = 14;
-const SAVE_KEY = 'anhaenger-tetris-v1';
-const DEFAULT_TRAILER = { L: 250, W: 130, H: 140 };
+const SAVE_KEY = 'anhaenger-tetris-v2';
+const DEFAULT_TRAILER = { L: 250, W: 150, H: 140 };
 const $ = (s) => document.querySelector(s);
 
 // ---------- three.js setup
