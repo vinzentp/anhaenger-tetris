@@ -1141,91 +1141,105 @@ function showSolution() {
     return;
   }
   const btn = $('#btn-solve');
-  const worker = new Worker(new URL('./solver-worker.js', import.meta.url), { type: 'module' });
+  // independent search runs in parallel; the best one wins
+  const runs = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+  const workers = [];
   const t0 = performance.now();
   let best = null;
+  let left = runs;
+  const better = (b) => b && (!best || b.cartons > best.cartons || (b.cartons === best.cartons && b.top < best.top));
   const tick = setInterval(() => {
     const s = Math.round((performance.now() - t0) / 1000);
-    btn.textContent = `Rechne … ${s} s${best ? `, bisher ${best.cartons.length} Kartons` : ''}`;
+    btn.textContent = `Rechne … ${s} s${best ? `, bisher ${best.cartons} Kartons` : ''}`;
   }, 250);
   const finish = () => {
     clearInterval(tick);
-    worker.terminate();
+    for (const w of workers) w.terminate();
     solving = false;
     btn.disabled = false;
     btn.textContent = 'Lösung zeigen';
   };
   solving = true;
   btn.disabled = true;
-  worker.onmessage = ({ data }) => {
-    if (data.type === 'best') {
-      best = data.best;
-      return;
-    }
-    finish();
-    if (!data.best) {
-      toast(data.timedOut ? 'In 30 s keine Lösung gefunden.' : 'Keine Lösung: so passt nicht alles rein.');
-      return;
-    }
-    solutions.set(key, data.best);
-    const n = data.best.cartons.length;
-    toast(`Beste gefundene Lösung: alle Möbel und ${n} ${n === 1 ? 'Karton' : 'Kartons'}`);
-    playSolution(data.best);
-  };
-  worker.onerror = () => {
-    finish();
-    toast('Die Lösungssuche ist fehlgeschlagen.');
-  };
-  worker.postMessage({ trailer, timeLimit: SOLVE_LIMIT });
+  for (let i = 0; i < runs; i++) {
+    const worker = new Worker(new URL('./solver-worker.js', import.meta.url), { type: 'module' });
+    workers.push(worker);
+    worker.onmessage = ({ data }) => {
+      if (better(data.best)) best = data.best;
+      if (data.type === 'best' || --left) return;
+      finish();
+      if (!best) {
+        toast('Keine Lösung gefunden: so passt nicht alles rein.');
+        return;
+      }
+      solutions.set(key, best);
+      toast(`Beste gefundene Lösung: alle Möbel und ${best.cartons} ${best.cartons === 1 ? 'Karton' : 'Kartons'}`);
+      playSolution(best);
+    };
+    worker.onerror = () => {
+      if (!solving) return;
+      finish();
+      toast('Die Lösungssuche ist fehlgeschlagen.');
+    };
+    worker.postMessage({ trailer, timeLimit: SOLVE_LIMIT, seed: i + 1 });
+  }
 }
 
-// Unloads everything and loads the solution: furniture piece by piece, then the moving boxes quickly.
+// Unloads everything and plays the solution in its drop order: furniture piece by piece, moving
+// boxes quickly. Boxes can come before furniture (a mattress on a stack of boxes, for example).
 function playSolution(best) {
   setPlaying(true);
   unloadAll();
   wonShown = true;
   const furn = furniture();
-  best.placements.forEach((p, i) => {
-    const it = furn.find((x) => x.def === CATALOG[p.index]);
+  let t = 0;
+  let boxes = 0;
+  best.steps.forEach((s, i) => {
+    const end = () => {
+      if (i < best.steps.length - 1) return;
+      setPlaying(false);
+      save();
+      toast(`Alle Möbel und ${best.cartons} ${best.cartons === 1 ? 'Karton' : 'Kartons'} sind drin.`);
+    };
+    if (s.index < 0) {
+      const n = boxes++;
+      setTimeout(() => {
+        const it = createItem(CARTON);
+        it.R = s.R;
+        it.shape = P.orient(CARTON.boxes, s.R);
+        it.x = s.x;
+        it.z = s.z;
+        it.y = P.landingY(it.shape, s.x, s.z, placedBoxes);
+        it.placed = true;
+        history.push(it.uid);
+        setPose(it, it.x, BED + it.y, it.z);
+        it.mesh.position.copy(it.target).setY(it.target.y + 120);
+        it.mesh.quaternion.copy(it.targetQ);
+        recomputePlaced();
+        if (n % 3 === 0) thud();
+        refreshUI();
+        end();
+      }, t);
+      t += 160;
+      return;
+    }
+    const it = furn.find((x) => x.def === CATALOG[s.index]);
     const pose = () => {
       if (active !== it) select(it);
-      it.R = p.R;
+      it.R = s.R;
       it.shape = P.orient(it.def.boxes, it.R);
-      it.x = p.x;
-      it.z = p.z;
+      it.x = s.x;
+      it.z = s.z;
       rebuildGhost();
       updateActive();
     };
-    setTimeout(pose, i * 1000);
+    setTimeout(pose, t);
     setTimeout(() => {
       pose();
       drop();
-      if (i === best.placements.length - 1 && !best.cartons.length) setPlaying(false);
-    }, i * 1000 + 500);
-  });
-  const t0 = best.placements.length * 1000 + 300;
-  best.cartons.forEach((c, i) => {
-    setTimeout(() => {
-      const it = createItem(CARTON);
-      it.R = c.R;
-      it.shape = P.orient(CARTON.boxes, c.R);
-      it.x = c.x;
-      it.z = c.z;
-      it.y = P.landingY(it.shape, c.x, c.z, placedBoxes);
-      it.placed = true;
-      history.push(it.uid);
-      setPose(it, it.x, BED + it.y, it.z);
-      it.mesh.position.copy(it.target).setY(it.target.y + 120);
-      it.mesh.quaternion.copy(it.targetQ);
-      recomputePlaced();
-      if (i % 3 === 0) thud();
-      refreshUI();
-      if (i === best.cartons.length - 1) {
-        setPlaying(false);
-        save();
-        toast(`Alle Möbel und ${best.cartons.length} Kartons sind drin.`);
-      }
-    }, t0 + i * 160);
+      end();
+    }, t + 500);
+    t += 1000;
   });
 }
 

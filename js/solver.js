@@ -3,15 +3,14 @@
 // Pieces are dropped from above, like in the game, so the load is fully described by a height map
 // (1 cm grid): a piece lands where the highest point under any of its boxes touches it.
 //
-// 1. Furniture: beam search. Starting from the empty trailer, every kept state is extended by every
-//    remaining piece in every orientation at the lowest sensible spots (against walls and edges of what
-//    is already loaded). States are ranked by the volume under the load envelope: everything below it
-//    can no longer be reached from above, so less is better. Nesting pieces into each other pays off.
-//    Loose parts (cushions) follow the big pieces one by one, largest first; trying every order of
-//    many small parts would explode.
-// 2. Moving boxes: for the best finished furniture packings, boxes are filled in greedily, each at the
-//    lowest free spot (several fill orders are tried). The packing with the most boxes wins, ties go
-//    to the lower load.
+// Furniture, cushions and boxes are planned together as one drop sequence. A placement rule turns a
+// sequence into a load: every item goes to the orientation and spot that wastes the least space under
+// the load envelope (space nothing can reach from above any more); ties go to the lower spot, then
+// to the front left. Because boxes may come early, a mattress can end up on a stack of boxes and a
+// cushion under a couch or in its seat. Simulated annealing searches the sequence: it moves pieces to
+// other positions, swaps them and changes their orientation, and keeps a change when the load holds
+// more boxes (or as many with more free room), sometimes also a worse one to get out of dead ends.
+// Boxes run until the first one finds no spot: heights only grow, so no later one would fit either.
 import * as P from './physics.js';
 
 function allRotations() {
@@ -27,381 +26,317 @@ function allRotations() {
   return [...seen.values()];
 }
 
+// The top surface of a piece as disjoint rectangles with their height, to measure how much the
+// load envelope grows when it lands.
+function topRects(boxes) {
+  const xs = [...new Set(boxes.flatMap((b) => [b.x0, b.x1]))].sort((a, b) => a - b);
+  const zs = [...new Set(boxes.flatMap((b) => [b.z0, b.z1]))].sort((a, b) => a - b);
+  const top = xs.slice(1).map((_, i) => zs.slice(1).map((_, j) => {
+    let t = -1;
+    for (const b of boxes) if (b.x0 <= xs[i] && b.x1 >= xs[i + 1] && b.z0 <= zs[j] && b.z1 >= zs[j + 1]) t = Math.max(t, b.y1);
+    return t;
+  }));
+  // runs along z per x strip, merged with the same run of the strip before
+  const rects = [];
+  for (let i = 0; i < xs.length - 1; i++) {
+    for (let j = 0; j < zs.length - 1;) {
+      const t = top[i][j];
+      let k = j;
+      while (k < zs.length - 1 && top[i][k] === t) k++;
+      if (t >= 0) {
+        const prev = rects.find((r) => r.x1 === xs[i] && r.z0 === zs[j] && r.z1 === zs[k] && r.top === t);
+        if (prev) prev.x1 = xs[i + 1];
+        else rects.push({ x0: xs[i], x1: xs[i + 1], z0: zs[j], z1: zs[k], top: t });
+      }
+      j = k;
+    }
+  }
+  return rects;
+}
+
 // Distinct orientations of a piece that fit into the trailer at all.
 function orientations(def, { L, W, H }) {
   const unique = new Map();
   for (const R of allRotations()) {
     const s = P.orient(def.boxes, R);
-    if (s.size[0] > L || s.size[1] > H || s.size[2] > W) continue;
+    if (s.size[0] > L + 1e-6 || s.size[1] > H + 1e-6 || s.size[2] > W + 1e-6) continue;
     const boxes = s.boxes.map((b) => ({
-      x0: Math.floor(b.min[0]), x1: Math.ceil(b.max[0]),
-      z0: Math.floor(b.min[2]), z1: Math.ceil(b.max[2]),
+      x0: Math.floor(b.min[0] + 1e-6), x1: Math.ceil(b.max[0] - 1e-6),
+      z0: Math.floor(b.min[2] + 1e-6), z1: Math.ceil(b.max[2] - 1e-6),
       y0: b.min[1], y1: b.max[1],
     }));
-    // top profile of the piece, sampled every 2 cm, to estimate how the load envelope grows
-    const [sx, , sz] = s.size.map(Math.ceil);
-    const col = new Float32Array(sx * sz).fill(-1);
-    for (const b of boxes) {
-      for (let x = b.x0; x < b.x1; x++) for (let z = b.z0; z < b.z1; z++) col[x * sz + z] = Math.max(col[x * sz + z], b.y1);
+    const key = JSON.stringify(boxes);
+    if (unique.has(key)) continue;
+    const rects = topRects(boxes);
+    let area = 0;
+    let topSum = 0;
+    for (const r of rects) {
+      const a = (r.x1 - r.x0) * (r.z1 - r.z0);
+      area += a;
+      topSum += a * r.top;
     }
-    const profile = [];
-    for (let x = 0; x < sx; x += 2) for (let z = 0; z < sz; z += 2) if (col[x * sz + z] >= 0) profile.push(x, z, col[x * sz + z]);
-    unique.set(JSON.stringify(s.boxes), { R, size: s.size.map(Math.ceil), boxes, profile });
+    unique.set(key, { R, size: s.size.map((v) => Math.ceil(v - 1e-6)), boxes, rects, area, topSum });
   }
   return [...unique.values()];
 }
 
+function place(h, W, o, x, y, z) {
+  for (const b of o.boxes) {
+    const top = Math.ceil(y + b.y1 - 1e-6);
+    for (let i = x + b.x0; i < x + b.x1; i++) {
+      for (let j = z + b.z0, k = i * W + j; j < z + b.z1; j++, k++) if (h[k] < top) h[k] = top;
+    }
+  }
+}
+
 const LOG2 = new Uint8Array(4097);
 for (let i = 2; i < LOG2.length; i++) LOG2[i] = LOG2[i >> 1] + 1;
+let table = new Int16Array(1 << 16);
 
-// The sparse table is big (about 5 MB) and only one height map is queried at a time, so all of them
-// share one set of buffers; a map rebuilds it when another one used it in between.
-let table = null;
-
-// Height of the load per cm², with a 2D sparse table for fast "highest point in a rectangle".
-class HeightMap {
-  constructor(L, W, from) {
-    this.L = L;
-    this.W = W;
-    this.h = from ? from.h.slice() : new Int16Array(L * W);
-    this.t = null;
-  }
-
-  add(x0, x1, z0, z1, top) {
-    const { W, h } = this;
-    for (let x = Math.max(0, x0); x < Math.min(this.L, x1); x++) {
-      for (let z = Math.max(0, z0), i = x * W + z; z < Math.min(W, z1); z++, i++) if (h[i] < top) h[i] = top;
-    }
-    this.t = null;
-  }
-
-  build() {
-    const { L, W, h } = this;
-    const KX = LOG2[L] + 1;
-    const KZ = LOG2[W] + 1;
-    if (!table || table.L !== L || table.W !== W) {
-      table = { L, W, t: Array.from({ length: KX * KZ }, (_, i) => (i ? new Int16Array(L * W) : null)) };
-    }
-    table.owner = this;
-    const t = table.t;
-    t[0] = h;
-    for (let kz = 1; kz < KZ; kz++) {
-      const prev = t[kz - 1];
-      const cur = t[kz];
-      const step = 1 << (kz - 1);
-      const zmax = W - (1 << kz);
-      for (let x = 0; x < L; x++) {
-        for (let z = 0, i = x * W; z <= zmax; z++, i++) cur[i] = prev[i] > prev[i + step] ? prev[i] : prev[i + step];
-      }
-    }
-    for (let kx = 1; kx < KX; kx++) {
-      const step = (1 << (kx - 1)) * W;
-      const n = (L - (1 << kx) + 1) * W;
-      for (let kz = 0; kz < KZ; kz++) {
-        const prev = t[(kx - 1) * KZ + kz];
-        const cur = t[kx * KZ + kz];
-        for (let i = 0; i < n; i++) cur[i] = prev[i] > prev[i + step] ? prev[i] : prev[i + step];
-      }
-    }
-    this.t = t;
-    this.KZ = KZ;
-  }
-
-  // Highest point in [x0, x1) × [z0, z1).
-  max(x0, x1, z0, z1) {
-    if (table?.owner !== this || !this.t) this.build();
-    const kx = LOG2[x1 - x0];
-    const kz = LOG2[z1 - z0];
-    const a = this.t[kx * this.KZ + kz];
-    const W = this.W;
-    const xa = x0 * W;
-    const xb = (x1 - (1 << kx)) * W;
-    const zb = z1 - (1 << kz);
-    return Math.max(a[xa + z0], a[xa + zb], a[xb + z0], a[xb + zb]);
-  }
-
-  landing(o, x, z) {
-    let y = 0;
-    for (const b of o.boxes) {
-      const v = this.max(x + b.x0, x + b.x1, z + b.z0, z + b.z1) - b.y0;
-      if (v > y) y = v;
-    }
-    return y;
-  }
-
-  place(o, x, y, z) {
-    for (const b of o.boxes) this.add(x + b.x0, x + b.x1, z + b.z0, z + b.z1, Math.ceil(y + b.y1));
-  }
-}
-
-function candidates(size, edges, lim) {
-  const out = new Set([0, lim - size]);
-  for (const e of edges) {
-    out.add(e);
-    out.add(e - size);
-  }
-  return [...out].filter((v) => v >= 0 && v + size <= lim);
-}
-
-// ---------- furniture
-
-// How much usable space a placement costs, sampled on the 2 cm profile grid. Without moving boxes
-// that is the growth of the load envelope. With boxes only free height in whole box layers counts
-// (24 cm of air above a couch hold no box), plus a little of the plain growth to break ties.
-function spaceCost(hm, o, x, y, z, H, layer) {
-  const { W, h } = hm;
-  const p = o.profile;
-  let grow = 0;
-  let lost = 0;
-  for (let i = 0; i < p.length; i += 3) {
-    const old = h[(x + p[i]) * W + z + p[i + 1]];
-    const now = y + p[i + 2];
-    if (now <= old) continue;
-    grow += now - old;
-    if (layer) lost += Math.floor((H - old) / layer) - Math.floor((H - now) / layer);
-  }
-  return layer ? (lost * layer + grow * 0.05) * 4 : grow * 4;
-}
-
-function stillFits(hm, left, orients, xs, zs, { L, W, H }) {
-  hm.build();
-  const ok = left.every((n, k) => !n || orients[k].some((o) => {
-    const [sx, sy, sz] = o.size;
-    return candidates(sx, xs, L).some((x) => candidates(sz, zs, W).some((z) => hm.landing(o, x, z) + sy <= H));
-  }));
-  return ok;
-}
-
-// States are grouped by which pieces they already hold; each group keeps its best `beam` states,
-// so packings that start with a different piece are not crowded out.
-function beamSearch(defs, trailer, { beam, perOrient, layer, deadline }) {
-  const { L, W, H } = trailer;
-  const kindOf = defs.map((d) => JSON.stringify(d.boxes));
-  const kinds = [...new Set(kindOf)];
-  const members = kinds.map((k) => defs.map((_, i) => i).filter((i) => kindOf[i] === k));
-  const orients = kinds.map((_, ki) => orientations(defs[members[ki][0]], trailer));
-  if (orients.some((o) => !o.length)) return [];
-  const isLoose = kinds.map((_, ki) => !!defs[members[ki][0]].loose);
-  const bigKinds = kinds.map((_, ki) => ki).filter((ki) => !isLoose[ki]);
-  const nBig = bigKinds.reduce((n, ki) => n + members[ki].length, 0);
-  const looseSeq = kinds
-    .map((_, ki) => ki)
-    .filter((ki) => isLoose[ki])
-    .sort((a, b) => P.volume(defs[members[b][0]].boxes) - P.volume(defs[members[a][0]].boxes))
-    .flatMap((ki) => members[ki].map(() => ki));
-
-  let states = [{
-    hm: new HeightMap(L, W),
-    left: members.map((m) => m.length),
-    placed: [],
-    top: 0,
-    env: 0,
-    xs: [0, L],
-    zs: [0, W],
-  }];
-  for (let level = 0; level < defs.length; level++) {
-    const groups = new Map();
-    for (const st of states) {
-      if (Date.now() > deadline) return null;
-      st.hm.build();
-      for (const k of level < nBig ? bigKinds : [looseSeq[level - nBig]]) {
-        if (!st.left[k]) continue;
-        const left = st.left.slice();
-        left[k]--;
-        const gk = left.join(',');
-        if (!groups.has(gk)) groups.set(gk, []);
-        const group = groups.get(gk);
-        for (let oi = 0; oi < orients[k].length; oi++) {
-          const o = orients[k][oi];
-          const [sx, sy, sz] = o.size;
-          // per orientation only the lowest spots, ties go to spots near a corner
-          const spots = [];
-          for (const x of candidates(sx, st.xs, L)) {
-            for (const z of candidates(sz, st.zs, W)) {
-              const y = st.hm.landing(o, x, z);
-              if (y + sy > H) continue;
-              const corner = Math.min(x, L - x - sx) + Math.min(z, W - z - sz);
-              spots.push({ x, y, z, r: y * 1e4 + corner });
-            }
-          }
-          spots.sort((a, b) => a.r - b.r);
-          for (const { x, y, z } of spots.slice(0, perOrient)) {
-            const env = st.env + spaceCost(st.hm, o, x, y, z, H, layer);
-            if (group.length >= beam * 3 && env >= group[group.length - 1].env) continue;
-            const sig = `${k}:${oi}:${x}:${y}:${z}`;
-            const key = [...st.placed.map((p) => p.sig), sig].sort().join('|');
-            if (group.some((c) => c.key === key)) continue;
-            group.push({ st, k, oi, x, y, z, env, key, sig, top: Math.max(st.top, y + sy), left });
-            group.sort((a, b) => a.env - b.env);
-            if (group.length > beam * 3) group.pop();
-          }
-        }
-      }
-    }
-    // keep the best `beam` states per group in which every missing piece still fits somewhere on its own
-    states = [];
-    const last = level === defs.length - 1;
-    for (const group of groups.values()) {
-      let kept = 0;
-      for (const c of group) {
-        if (kept >= beam) break;
-        const o = orients[c.k][c.oi];
-        const hm = new HeightMap(L, W, c.st.hm);
-        hm.place(o, c.x, c.y, c.z);
-        const xs = [...new Set([...c.st.xs, ...o.boxes.flatMap((b) => [c.x + b.x0, c.x + b.x1])])];
-        const zs = [...new Set([...c.st.zs, ...o.boxes.flatMap((b) => [c.z + b.z0, c.z + b.z1])])];
-        if (!last && !stillFits(hm, c.left, orients, xs, zs, trailer)) continue;
-        kept++;
-        states.push({
-          hm, left: c.left, top: c.top, env: c.env,
-          placed: [...c.st.placed, { k: c.k, oi: c.oi, x: c.x, y: c.y, z: c.z, sig: c.sig }],
-          xs,
-          zs,
-        });
-      }
-    }
-    if (!states.length) return [];
-  }
-
-  // map kinds back to concrete pieces (identical pieces are interchangeable)
-  return states.map((st) => {
-    const pool = members.map((m) => m.slice());
-    return {
-      hm: st.hm,
-      top: st.top,
-      env: st.env,
-      placements: st.placed.map((p) => {
-        const o = orients[p.k][p.oi];
-        return { index: pool[p.k].shift(), R: o.R, x: p.x, y: p.y, z: p.z };
-      }),
-    };
-  });
-}
-
-// ---------- moving boxes
-
-// 2D sliding-window maximum of the height map for a w × d footprint. The result lives in a shared
-// buffer and is only valid until the next call.
-let wm = null;
-function windowMax(hm, w, d) {
-  const { L, W, h } = hm;
-  const nz = W - d + 1;
-  const nx = L - w + 1;
-  if (!wm || wm.n < L * W) wm = { n: L * W, tmp: new Int16Array(L * W), out: new Int16Array(L * W), dq: new Int32Array(Math.max(L, W)) };
-  const { tmp, out, dq } = wm;
+// Best spot for one item, or null. Only spots flush with a wall or a height step on both axes count.
+// The height map is constant between its steps, so "highest point in a rectangle" runs on the
+// compressed grid of those cells with a 2D sparse table; the wasted space comes from prefix sums.
+function bestSpot(h, { L, W, H }, orients, only) {
+  const W1 = W + 1;
+  const S = new Int32Array((L + 1) * W1);
+  const ex = new Uint8Array(L + 1);
+  const ez = new Uint8Array(W + 1);
+  ex[0] = ex[L] = ez[0] = ez[W] = 1;
   for (let x = 0; x < L; x++) {
-    let head = 0;
-    let tail = 0;
-    const base = x * W;
+    let row = 0;
     for (let z = 0; z < W; z++) {
-      const v = h[base + z];
-      while (tail > head && h[base + dq[tail - 1]] <= v) tail--;
-      dq[tail++] = z;
-      if (dq[head] <= z - d) head++;
-      if (z >= d - 1) tmp[x * nz + z - d + 1] = h[base + dq[head]];
+      const v = h[x * W + z];
+      row += v;
+      S[(x + 1) * W1 + z + 1] = S[x * W1 + z + 1] + row;
+      if (x && h[(x - 1) * W + z] !== v) ex[x] = 1;
+      if (z && h[x * W + z - 1] !== v) ez[z] = 1;
     }
   }
-  for (let z = 0; z < nz; z++) {
-    let head = 0;
-    let tail = 0;
-    for (let x = 0; x < L; x++) {
-      const v = tmp[x * nz + z];
-      while (tail > head && tmp[dq[tail - 1] * nz + z] <= v) tail--;
-      dq[tail++] = x;
-      if (dq[head] <= x - w) head++;
-      if (x >= w - 1) out[(x - w + 1) * nz + z] = tmp[dq[head] * nz + z];
+  const xs = [];
+  const zs = [];
+  for (let x = 0; x <= L; x++) if (ex[x]) xs.push(x);
+  for (let z = 0; z <= W; z++) if (ez[z]) zs.push(z);
+  const nx = xs.length - 1;
+  const nz = zs.length - 1;
+  const cx = new Int16Array(L);
+  const cz = new Int16Array(W);
+  for (let i = 0; i < nx; i++) cx.fill(i, xs[i], xs[i + 1]);
+  for (let j = 0; j < nz; j++) cz.fill(j, zs[j], zs[j + 1]);
+  const KX = LOG2[nx] + 1;
+  const KZ = LOG2[nz] + 1;
+  const n = nx * nz;
+  if (table.length < KX * KZ * n) table = new Int16Array(KX * KZ * n * 2);
+  const t = table;
+  for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) t[i * nz + j] = h[xs[i] * W + zs[j]];
+  for (let kz = 1; kz < KZ; kz++) {
+    const prev = (kz - 1) * n;
+    const cur = kz * n;
+    const step = 1 << (kz - 1);
+    const jmax = nz - (1 << kz);
+    for (let i = 0; i < nx; i++) {
+      for (let j = 0, a = i * nz; j <= jmax; j++, a++) t[cur + a] = t[prev + a] > t[prev + a + step] ? t[prev + a] : t[prev + a + step];
     }
   }
-  return { out, nx, nz };
-}
-
-// Greedy fill: each box goes to the free spot the score ranks first.
-function fillBoxes(hm0, orients, H, score, deadline) {
-  const hm = new HeightMap(hm0.L, hm0.W, hm0);
-  const placed = [];
-  for (;;) {
-    if (Date.now() > deadline) return null;
-    let best = null;
-    for (let oi = 0; oi < orients.length; oi++) {
-      const [w, sh, d] = orients[oi].size;
-      const { out, nx, nz } = windowMax(hm, w, d);
-      for (let x = 0; x < nx; x++) {
-        for (let z = 0; z < nz; z++) {
-          const y = out[x * nz + z];
-          if (y + sh > H) continue;
-          const s = score(x, y, z, sh);
-          if (!best || s < best.s) best = { s, oi, x, y, z };
-        }
-      }
+  for (let kx = 1; kx < KX; kx++) {
+    const step = (1 << (kx - 1)) * nz;
+    const lim = (nx - (1 << kx) + 1) * nz;
+    for (let kz = 0; kz < KZ; kz++) {
+      const prev = ((kx - 1) * KZ + kz) * n;
+      const cur = (kx * KZ + kz) * n;
+      for (let a = 0; a < lim; a++) t[cur + a] = t[prev + a] > t[prev + a + step] ? t[prev + a] : t[prev + a + step];
     }
-    if (!best) return placed;
-    const o = orients[best.oi];
-    hm.add(best.x, best.x + o.size[0], best.z, best.z + o.size[2], best.y + o.size[1]);
-    placed.push({ R: o.R, x: best.x, y: best.y, z: best.z, top: best.y + o.size[1] });
   }
-}
-
-const FILL_ORDERS = [
-  (x, y, z) => y * 1e8 + x * 1e4 + z,
-  (x, y, z) => y * 1e8 + z * 1e4 + x,
-  (x, y, z, h) => (y + h) * 1e8 + x * 1e4 + z,
-];
-
-export function solve(defs, trailer, { carton = null, timeLimit = 30000, onBest } = {}) {
-  const start = Date.now();
-  const deadline = start + timeLimit;
-  const T = { L: Math.round(trailer.L), W: Math.round(trailer.W), H: Math.round(trailer.H) };
-
-  // the thinnest side of a box decides which gaps can still take one
-  const layer = carton ? Math.min(...P.orient(carton.boxes, P.IDENT).size) : 0;
-
-  // Furniture: which ranking finds the packing with the most room for boxes differs from case to case,
-  // so both run (plain envelope and whole box layers), each with a widening beam while time allows.
-  // The best finished packings of every run are collected.
-  const metrics = layer ? [0, layer] : [0];
-  const share = (timeLimit * 0.8) / metrics.length;
-  const finals = new Map();
-  let timedOut = false;
-  metrics.forEach((m, mi) => {
-    const until = start + share * (mi + 1);
-    for (let b = 4; b <= 64; b *= 2) {
-      const t0 = Date.now();
-      const res = beamSearch(defs, T, { beam: b, perOrient: 6 + b, layer: m, deadline: until });
-      if (res === null) {
-        timedOut = true;
-        break;
-      }
-      res.sort((a, z) => a.env - z.env);
-      for (const f of res) finals.set(JSON.stringify(f.placements), f);
-      // the next round costs about twice as much (measured), with some margin
-      if (Date.now() + (Date.now() - t0) * 2.5 > until) break;
-    }
-  });
-  if (!finals.size) return { best: null, timedOut, ms: Date.now() - start };
+  const spots = (e, len, s) => {
+    const out = [];
+    for (let v = 0; v + s <= len; v++) if (e[v] || e[v + s]) out.push(v);
+    return out;
+  };
 
   let best = null;
-  const offer = (cand) => {
-    const n = cand.cartons.length;
-    if (!best || n > best.cartons.length || (n === best.cartons.length && cand.top < best.top)) {
-      best = cand;
-      onBest?.(best);
-    }
-  };
-  for (const f of finals.values()) offer({ top: f.top, placements: f.placements, cartons: [] });
-
-  if (carton) {
-    const orients = orientations(carton, T);
-    outer: for (const order of FILL_ORDERS) {
-      for (const f of finals.values()) {
-        const boxes = fillBoxes(f.hm, orients, T.H, order, deadline);
-        if (!boxes) {
-          timedOut = true;
-          break outer;
+  for (let oi = 0; oi < orients.length; oi++) {
+    if (only >= 0 && oi !== only) continue;
+    const o = orients[oi];
+    const [sx, sy, sz] = o.size;
+    if (sx > L || sz > W || sy > H) continue;
+    const bx = o.boxes;
+    const rs = o.rects;
+    const ia = new Int32Array(bx.length);
+    const ib = new Int32Array(bx.length);
+    const kxs = new Int32Array(bx.length);
+    const zSpots = spots(ez, W, sz);
+    for (const x of spots(ex, L, sx)) {
+      for (let i = 0; i < bx.length; i++) {
+        const i0 = cx[x + bx[i].x0];
+        const i1 = cx[x + bx[i].x1 - 1];
+        kxs[i] = LOG2[i1 - i0 + 1];
+        ia[i] = i0 * nz;
+        ib[i] = (i1 - (1 << kxs[i]) + 1) * nz;
+      }
+      for (const z of zSpots) {
+        let y = 0;
+        for (let i = 0; i < bx.length; i++) {
+          const b = bx[i];
+          const j0 = cz[z + b.z0];
+          const j1 = cz[z + b.z1 - 1];
+          const kz = LOG2[j1 - j0 + 1];
+          const base = (kxs[i] * KZ + kz) * n;
+          const jb = j1 - (1 << kz) + 1;
+          let m = t[base + ia[i] + j0];
+          if (t[base + ia[i] + jb] > m) m = t[base + ia[i] + jb];
+          if (t[base + ib[i] + j0] > m) m = t[base + ib[i] + j0];
+          if (t[base + ib[i] + jb] > m) m = t[base + ib[i] + jb];
+          m -= b.y0;
+          if (m > y) y = m;
         }
-        const top = Math.max(f.top, ...boxes.map((b) => b.top));
-        offer({ top, placements: f.placements, cartons: boxes.map(({ R, x, y, z }) => ({ R, x, y, z })) });
+        if (y + sy > H) continue;
+        let under = 0;
+        for (let i = 0; i < rs.length; i++) {
+          const r = rs[i];
+          const a0 = (x + r.x0) * W1;
+          const a1 = (x + r.x1) * W1;
+          under += S[a1 + z + r.z1] - S[a0 + z + r.z1] - S[a1 + z + r.z0] + S[a0 + z + r.z0];
+        }
+        const waste = o.area * y + o.topSum - under;
+        if (!best || waste < best.waste || (waste === best.waste && y < best.y)) best = { waste, oi, x, y, z };
       }
     }
   }
-  return { best, timedOut, ms: Date.now() - start };
+  return best;
+}
+
+function random(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function solve(defs, trailer, { carton, timeLimit = 30000, seed = 1, onBest } = {}) {
+  const start = Date.now();
+  const end = start + timeLimit;
+  const T = { L: Math.round(trailer.L), W: Math.round(trailer.W), H: Math.round(trailer.H) };
+  const cells = T.L * T.W;
+  const items = [...defs, carton];
+  const BOX = defs.length;
+  const ori = items.map((d) => orientations(d, T));
+  if (defs.some((_, i) => !ori[i].length)) return { best: null, ms: Date.now() - start };
+  const rand = random(seed);
+
+  // Height maps before each step are kept so a change in the middle of the sequence only replays
+  // the rest. Big trailers keep fewer of them (about 16 MB per sequence).
+  const stride = (len) => Math.max(1, Math.ceil((cells * 2 * len) / 16e6));
+
+  // seq: [{ k: item, o: orientation or -1 for "best" }]. Replays from step `from` of `prev`.
+  function decode(seq, from = 0, prev = null) {
+    const every = stride(seq.length);
+    const k0 = prev ? Math.floor(from / every) * every : 0;
+    const snaps = prev && prev.every === every ? prev.snaps.slice(0, k0 / every + 1) : [new Int16Array(cells)];
+    const k = prev && prev.every === every ? k0 : 0;
+    const steps = prev ? prev.steps.slice(0, k) : [];
+    let st = k ? { ...prev.st[k - 1] } : { boxes: 0, missing: 0, full: false };
+    const sts = prev ? prev.st.slice(0, k) : [];
+    const h = snaps[snaps.length - 1].slice();
+    for (let i = k; i < seq.length; i++) {
+      const { k: it, o } = seq[i];
+      let p = null;
+      if (!(it === BOX && st.full)) {
+        const s = bestSpot(h, T, ori[it], o);
+        if (s) {
+          place(h, T.W, ori[it][s.oi], s.x, s.y, s.z);
+          p = { k: it, oi: s.oi, x: s.x, y: s.y, z: s.z };
+        }
+      }
+      st = { ...st };
+      if (it === BOX) {
+        if (p) st.boxes++;
+        else st.full = true;
+      } else if (!p) st.missing++;
+      steps.push(p);
+      sts.push(st);
+      if ((i + 1) % every === 0) snaps.push(h.slice());
+    }
+    let free = 0;
+    let top = 0;
+    for (let i = 0; i < cells; i++) {
+      free += T.H - h[i];
+      if (h[i] > top) top = h[i];
+    }
+    return { seq, snaps, every, steps, st: sts, top, ...st, score: st.boxes - 100 * st.missing + free / (cells * T.H) };
+  }
+
+  // boxes until one finds no spot, so the sequence always ends with enough of them
+  function topUp(seq, res) {
+    while (!res.full) {
+      const n = seq.length;
+      for (let i = 0; i < 10; i++) seq.push({ k: BOX, o: -1 });
+      res = decode(seq, n, res);
+    }
+    return res;
+  }
+
+  const result = (r) => ({
+    cartons: r.boxes,
+    top: r.top,
+    steps: r.steps.filter(Boolean).map((p) => {
+      const o = ori[p.k][p.oi];
+      return { index: p.k === BOX ? -1 : p.k, R: o.R, x: p.x, y: p.y, z: p.z };
+    }),
+  });
+
+  // start: big pieces first, then cushions, then boxes, like the old two-stage search
+  const vol = (i) => P.volume(items[i].boxes) * (defs[i].loose ? 1 : 1e3);
+  const seq0 = defs.map((_, i) => ({ k: i, o: -1 })).sort((a, b) => vol(b.k) - vol(a.k));
+  let cur = topUp(seq0, decode(seq0));
+  let best = cur;
+  const report = () => {
+    if (!best.missing) onBest?.(result(best));
+  };
+  report();
+
+  const T0 = 0.4;
+  const T1 = 0.02;
+  while (Date.now() < end) {
+    const temp = T0 * (T1 / T0) ** ((Date.now() - start) / timeLimit);
+    const seq = cur.seq.slice();
+    // mostly furniture moves; a box moved to another spot is the same as moving the furniture
+    const pick = () => {
+      for (;;) {
+        const i = Math.floor(rand() * seq.length);
+        if (seq[i].k !== BOX || rand() < 0.15) return i;
+      }
+    };
+    let from;
+    const m = rand();
+    if (m < 0.45) {
+      const i = pick();
+      const [s] = seq.splice(i, 1);
+      const j = Math.floor(rand() * (seq.length + 1));
+      seq.splice(j, 0, s);
+      from = Math.min(i, j);
+    } else if (m < 0.75) {
+      const i = pick();
+      const j = pick();
+      if (i === j) continue;
+      [seq[i], seq[j]] = [seq[j], seq[i]];
+      from = Math.min(i, j);
+    } else {
+      const i = pick();
+      if (seq[i].k === BOX) continue;
+      seq[i] = { k: seq[i].k, o: rand() < 0.5 ? -1 : Math.floor(rand() * ori[seq[i].k].length) };
+      from = i;
+    }
+    const cand = topUp(seq, decode(seq, from, cur));
+    const d = cand.score - cur.score;
+    if (d >= 0 || rand() < Math.exp(d / temp)) cur = cand;
+    if (cur.score > best.score) {
+      const more = cur.boxes > best.boxes || best.missing;
+      best = cur;
+      if (more) report();
+    }
+  }
+  return { best: best.missing ? null : result(best), ms: Date.now() - start };
 }
